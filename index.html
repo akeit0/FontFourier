@@ -1,0 +1,413 @@
+<!doctype html>
+<!-- Credits: THIRD_PARTY_NOTICES.md -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Font Fourier Epicycles</title>
+<link rel="canonical" href="https://akeit0.github.io/FontFourier/">
+<link rel="icon" type="image/png" href="./assets/thumbnail.png">
+<meta name="description" content="Explore font outlines as Fourier epicycles and stereo sound. 日本語・English対応のフーリエ可視化デモ。">
+<meta property="og:title" content="Font Fourier Epicycles">
+<meta property="og:description" content="Font outlines reconstructed with Fourier epicycles and stereo sound.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://akeit0.github.io/FontFourier/">
+<meta property="og:site_name" content="Font Fourier">
+<meta property="og:image" content="https://akeit0.github.io/FontFourier/assets/thumbnail.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="816">
+<meta property="og:image:height" content="816">
+<meta property="og:image:alt" content="The letter F reconstructed with Fourier epicycles at order 40">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Font Fourier Epicycles">
+<meta name="twitter:description" content="Font outlines reconstructed with Fourier epicycles and stereo sound.">
+<meta name="twitter:image" content="https://akeit0.github.io/FontFourier/assets/thumbnail.png">
+<meta name="twitter:image:alt" content="The letter F reconstructed with Fourier epicycles at order 40">
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#090c11;--panel:#111722;--panel2:#171e2b;--line:#2a3548;
+  --text:#eef3ff;--muted:#9ba7bd;--accent:#7dd3fc;--accent2:#c4b5fd;
+  --safe-bottom:max(8px,env(safe-area-inset-bottom));
+}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,select{font:inherit}
+button{cursor:pointer}
+.languageSelect{width:76px;flex:0 0 auto}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.app{
+  width:100%;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-rows:auto 1fr auto;background:var(--bg)
+}
+.topbar{
+  min-height:58px;display:flex;align-items:center;gap:9px;padding:8px 12px;
+  border-bottom:1px solid var(--line);background:rgba(13,18,27,.97);z-index:5
+}
+.brand{font-weight:850;font-size:16px;white-space:nowrap}
+.quick{flex:1;min-width:0;display:grid;grid-template-columns:minmax(74px,180px) minmax(170px,300px) 76px;gap:7px}
+input,select{
+  min-width:0;width:100%;border:1px solid var(--line);border-radius:10px;
+  background:var(--panel2);color:var(--text);padding:9px 10px;outline:none;
+  font-size:15px
+}
+input:focus,select:focus{border-color:#4c647f}
+.iconBtn{
+  width:42px;height:42px;border-radius:11px;border:1px solid #34373d;
+  background:#1b1d21;color:#d8dbe2;font-size:20px;flex:0 0 auto;
+  transition:background-color .15s ease,border-color .15s ease,color .15s ease
+}
+.iconBtn:hover{background:#23262b;border-color:#45484f;color:#eef0f4}
+.iconBtn:focus-visible{outline:2px solid #91959c;outline-offset:2px}
+.stage{position:relative;min-height:0;overflow:hidden}
+.repoLink{
+  display:grid;place-items:center;padding:0;text-decoration:none
+}
+.repoLink svg{width:20px;height:20px;fill:currentColor}
+#view{position:absolute;inset:0;width:100%;height:100%;display:block}
+.seriesPanel{
+  position:absolute;left:12px;right:12px;bottom:10px;height:154px;
+  padding:8px 10px 6px;border:1px solid rgba(85,99,122,.42);border-radius:13px;
+  background:rgba(9,12,17,.72);backdrop-filter:blur(9px);pointer-events:none
+}
+.seriesHead{font-size:11px;color:var(--muted);height:18px;display:flex;justify-content:space-between;gap:8px}
+#series{display:block;width:100%;height:121px}
+.transport{
+  display:grid;grid-template-columns:minmax(220px,1fr) auto 220px;gap:9px;align-items:center;
+  padding:8px 12px var(--safe-bottom);border-top:1px solid var(--line);background:rgba(13,18,27,.98);z-index:5
+}
+.mainAction{
+  width:100%;min-width:0;min-height:48px;border:0;border-radius:13px;background:var(--accent);color:#071019;
+  font-weight:850;font-size:16px;white-space:nowrap
+}
+.autoStopPill{
+  height:42px;display:flex;align-items:center;gap:7px;padding:0 11px;border:1px solid var(--line);
+  border-radius:11px;background:var(--panel2);white-space:nowrap;font-size:13px;color:var(--text)
+}
+.autoStopPill input{width:auto;accent-color:var(--accent);margin:0}
+.autoStopPill span{color:var(--muted);font-variant-numeric:tabular-nums}
+.transportInfo{
+  min-width:120px;max-width:260px;display:flex;flex-direction:column;align-items:flex-end;gap:2px;
+  color:var(--muted);font-size:11px;line-height:1.3
+}
+.status{width:100%;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modeBadge{color:var(--text);font-size:11px}
+.backdrop{
+  position:fixed;inset:0;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;
+  transition:opacity .18s ease;z-index:20
+}
+.drawer{
+  position:fixed;right:0;top:0;bottom:0;width:min(410px,92vw);background:#101620;
+  border-left:1px solid var(--line);z-index:21;transform:translateX(102%);
+  transition:transform .22s ease;display:grid;grid-template-rows:auto 1fr;
+  box-shadow:-16px 0 50px rgba(0,0,0,.38)
+}
+.settingsOpen .backdrop{opacity:1;pointer-events:auto}
+.settingsOpen .drawer{transform:none}
+.drawerHead{
+  height:58px;padding:9px 12px 9px 16px;display:flex;align-items:center;
+  justify-content:space-between;border-bottom:1px solid var(--line);font-weight:800
+}
+.closeBtn{
+  width:38px;height:38px;border-radius:10px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--text);font-size:18px
+}
+.drawerActions{display:flex;align-items:center;gap:7px}
+.aboutBtn{
+  min-height:38px;padding:0 11px;border-radius:10px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--text);font-weight:750;font-size:12px
+}
+.aboutOverlay{
+  position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.62);
+  display:flex;align-items:center;justify-content:center;padding:18px;
+  opacity:0;pointer-events:none;transition:opacity .18s ease
+}
+.aboutOpen .aboutOverlay{opacity:1;pointer-events:auto}
+.aboutCard{
+  width:min(720px,100%);max-height:min(84dvh,780px);
+  display:grid;grid-template-rows:auto 1fr;background:#101620;
+  border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 24px 80px rgba(0,0,0,.5);overflow:hidden
+}
+.aboutHead{
+  min-height:58px;padding:10px 12px 10px 18px;display:flex;
+  align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)
+}
+.aboutHead strong{font-size:16px}
+.aboutBody{overflow:auto;overscroll-behavior:contain;padding:18px 20px 24px}
+.aboutBody h3{font-size:13px;margin:20px 0 7px;color:#e5eaf3}
+.aboutBody h3:first-child{margin-top:0}
+.aboutBody p,.aboutBody li{font-size:12px;line-height:1.65;color:var(--muted)}
+.aboutBody ul{margin:7px 0 0;padding-left:19px}
+.aboutBody a{color:var(--accent);text-decoration:none}
+.aboutBody a:hover{text-decoration:underline}
+
+.drawerBody{overflow:auto;overscroll-behavior:contain;padding:4px 16px 30px}
+.section{padding:15px 0;border-bottom:1px solid var(--line)}
+.section:last-child{border-bottom:0}
+.section h2{
+  font-size:13px;margin:0 0 12px;color:#d7dfed;text-transform:uppercase;
+  letter-spacing:.07em
+}
+.field{margin:0 0 13px}
+.field:last-child{margin-bottom:0}
+label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+.val{float:right;color:var(--text);font-variant-numeric:tabular-nums}
+input[type="range"]{padding:0}
+.checkgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.check{
+  display:flex;align-items:center;gap:7px;margin:0;padding:9px 10px;border:1px solid var(--line);
+  border-radius:10px;background:var(--panel2);color:var(--text)
+}
+.check input{width:auto;margin:0;accent-color:var(--accent)}
+.hint{font-size:11px;color:var(--muted);line-height:1.5;margin-top:6px}
+.addRow{display:grid;grid-template-columns:1fr auto;gap:7px}
+.addRow button{
+  border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--text);
+  padding:8px 12px;font-weight:700
+}
+.fontProbe{
+  position:fixed;left:-10000px;top:-10000px;visibility:hidden;white-space:pre;
+  font-size:260px;line-height:1
+}
+@media(max-width:720px){
+  .topbar{min-height:52px;padding:6px 8px;gap:6px}
+  .brand{display:none}
+  .quick{grid-template-columns:minmax(58px,.65fr) minmax(140px,1.7fr) 68px;gap:5px}
+  input,select{padding:8px 8px;border-radius:9px;font-size:16px}
+  .iconBtn{width:38px;height:38px;font-size:18px}
+  .seriesPanel{left:7px;right:7px;bottom:6px;height:122px;padding:6px 7px 4px}
+  .seriesHead{font-size:10px;height:15px}
+  #series{height:98px}
+  .transport{grid-template-columns:1fr auto;grid-template-areas:"play autostop" "info info";padding:6px 8px var(--safe-bottom);gap:5px 7px}
+  .mainAction{grid-area:play;min-height:46px;font-size:16px}
+  .autoStopPill{grid-area:autostop;height:42px;padding:0 10px;font-size:13px}
+  .transportInfo{grid-area:info;min-width:0;max-width:none;width:100%;display:flex;flex-direction:row;justify-content:space-between;align-items:center;font-size:11px}
+  .status{text-align:left}
+  .drawer{
+    top:auto;left:0;right:0;bottom:0;width:100%;height:min(78dvh,720px);
+    border-left:0;border-top:1px solid var(--line);transform:translateY(102%);
+    border-radius:18px 18px 0 0
+  }
+  .settingsOpen .drawer{transform:none}
+  .drawerHead{height:52px}
+  .drawerBody{padding-bottom:max(24px,env(safe-area-inset-bottom))}
+  .aboutOverlay{align-items:flex-end;padding:0}
+  .aboutCard{
+    width:100%;max-height:82dvh;border-radius:18px 18px 0 0;
+    border-left:0;border-right:0;border-bottom:0
+  }
+  .aboutBody{padding:16px 16px max(24px,env(safe-area-inset-bottom))}
+  .aboutBody p,.aboutBody li{font-size:13px}
+}
+@media(max-width:520px){
+  .topbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto}
+  .brand{display:block;font-size:14px}
+  .quick{grid-column:1/-1;grid-row:2;grid-template-columns:minmax(48px,.65fr) minmax(0,1.7fr) 68px}
+  .languageSelect{width:76px;font-size:13px}
+}
+@media(max-width:430px){
+  .autoStopPill span{display:none}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand">Font Fourier</div>
+    <div class="quick">
+      <input id="text" value="A" maxlength="24" aria-label="Text" data-i18n-aria="textLabel">
+      <select id="fontPreset" aria-label="Font" data-i18n-aria="fontSection">
+        <option value="Noto Sans JP" data-i18n="sansJP">Sans — Noto Sans JP</option>
+        <option value="Noto Serif JP" data-i18n="serifJP">Serif — Noto Serif JP</option>
+        <option value="M PLUS Rounded 1c" data-i18n="rounded">Rounded — M PLUS Rounded 1c</option>
+        <option value="Zen Kaku Gothic New" data-i18n="kaku">Sans — Zen Kaku Gothic New</option>
+        <option value="Zen Old Mincho" data-i18n="mincho">Classic serif — Zen Old Mincho</option>
+        <option value="Roboto" selected data-i18n="roboto">Latin sans — Roboto</option>
+        <option value="Playfair Display" data-i18n="playfair">Latin serif — Playfair Display</option>
+      </select>
+      <select id="weight" aria-label="Font weight" data-i18n-aria="weightLabel">
+        <option>100</option><option>200</option><option>300</option>
+        <option selected>400</option><option>500</option><option>600</option>
+        <option>700</option><option>800</option><option>900</option>
+      </select>
+    </div>
+    <select id="language" class="languageSelect" aria-label="Language / 言語">
+      <option value="en" lang="en">EN</option>
+      <option value="ja" lang="ja">日本語</option>
+    </select>
+    <button id="settingsBtn" class="iconBtn" aria-label="Settings" data-i18n-aria="settings">⚙</button>
+    <a class="iconBtn repoLink" href="https://github.com/akeit0/FontFourier" target="_blank" rel="noopener noreferrer" aria-label="View source on GitHub" data-i18n-aria="githubLink">
+      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+      </svg>
+    </a>
+  </header>
+
+  <main class="stage">
+    <canvas id="view" role="img" aria-label="Fourier epicycles of font contours" data-i18n-aria="canvasLabel"></canvas>
+    <div class="seriesPanel" id="seriesPanel">
+      <div class="seriesHead">
+        <span><span data-i18n="coefficients">Fourier coefficients |cₖ|</span></span>
+        <span id="seriesCaption">all contours</span>
+      </div>
+      <canvas id="series" role="img" aria-label="Fourier coefficients |cₖ|" data-i18n-aria="coefficients"></canvas>
+    </div>
+  </main>
+
+  <footer class="transport">
+    <button id="mainAction" class="mainAction"><span data-i18n="play">Analyze &amp; play</span></button>
+    <label class="autoStopPill">
+      <input id="autoStop" type="checkbox" checked>
+      <span data-i18n="autoStop">Auto stop</span> <span id="autoStopLabel">2.0 s</span>
+    </label>
+    <div class="transportInfo">
+      <div class="modeBadge" id="playMode">220 Hz</div>
+      <div class="status" id="status" role="status" aria-live="polite">Ready</div>
+    </div>
+  </footer>
+</div>
+
+<div class="backdrop" id="backdrop"></div>
+<aside class="drawer" id="drawer" aria-hidden="true" inert>
+  <div class="drawerHead">
+    <span style="font-size:16px"><span data-i18n="settings">Settings</span></span>
+    <div class="drawerActions">
+      <button id="aboutBtn" class="aboutBtn" type="button"><span data-i18n="about">About</span></button>
+      <button id="closeSettings" class="closeBtn" aria-label="Close" data-i18n-aria="close">×</button>
+    </div>
+  </div>
+  <div class="drawerBody">
+
+    <section class="section">
+      <h2><span data-i18n="fontSection">Font</span></h2>
+      <div class="field">
+        <label><span data-i18n="addGoogleFont">Add a Google Font</span></label>
+        <div class="addRow">
+          <input id="customFont" placeholder="e.g. Shippori Mincho" data-i18n-placeholder="fontPlaceholder">
+          <button id="addFont" type="button"><span data-i18n="add">Add</span></button>
+        </div>
+        <div class="hint"><span data-i18n="fontHint">Added fonts stay available in this browser.</span></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2><span data-i18n="fourierSection">Fourier / display</span></h2>
+      <div class="field">
+        <label><span data-i18n="harmonics">Fourier order</span> <span class="val" id="harmVal">50</span></label>
+        <input id="harm" type="range" min="1" max="60" step="0.05" value="50">
+        <div class="hint"><span data-i18n="harmonicsHint">Maximum order |k| in both rotation directions.</span></div>
+      </div>
+      <div class="field">
+        <label><span data-i18n="samples">Contour samples</span> <span class="val" id="sampleVal">256</span></label>
+        <input id="samples" type="range" min="64" max="512" step="1" value="256">
+      </div>
+      <div class="field">
+        <label><span data-i18n="speed">Animation speed</span> <span class="val" id="speedVal">0.12</span></label>
+        <input id="speed" type="range" min="0.02" max="0.50" step="0.01" value="0.12">
+      </div>
+      <div class="field">
+        <label><span data-i18n="cycleTarget">Epicycle contours</span></label>
+        <select id="cycleTarget">
+          <option value="all" selected data-i18n="allContours">All contours</option>
+          <option value="largest" data-i18n="largestContour">Largest contour</option>
+        </select>
+      </div>
+      <div class="field">
+        <label><span data-i18n="cycleThickness">Epicycle line width</span></label>
+        <select id="cycleThickness">
+          <option value="0.45" data-i18n="extraThin">Extra thin</option>
+          <option value="0.9" data-i18n="thin">Thin</option>
+          <option value="1.9" selected data-i18n="normal">Normal</option>
+          <option value="3.0" data-i18n="thick">Thick</option>
+        </select>
+      </div>
+      <div class="checkgrid">
+        <label class="check"><input id="showGlyph" type="checkbox" checked><span data-i18n="glyph">Glyph</span></label>
+        <label class="check"><input id="showContour" type="checkbox"><span data-i18n="contour">Contour</span></label>
+        <label class="check"><input id="showRecon" type="checkbox" checked><span data-i18n="reconstruction">Reconstruction</span></label>
+        <label class="check"><input id="showCycles" type="checkbox" checked><span data-i18n="circles">Circles</span></label>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2><span data-i18n="audioSection">Audio / volume</span></h2>
+      <div class="field">
+        <label><span data-i18n="audioTarget">Audio contours</span></label>
+        <select id="audioTarget">
+          <option value="all" selected data-i18n="allContours">All contours</option>
+          <option value="largest" data-i18n="largestContour">Largest contour</option>
+        </select>
+      </div>
+      <div class="field">
+        <label><span data-i18n="frequency">Fundamental frequency</span> <span class="val" id="freqVal">220 Hz</span></label>
+        <input id="freq" type="range" min="40" max="880" step="1" value="220">
+      </div>
+      <div class="field">
+        <label><span data-i18n="volume">Output volume</span> <span class="val" id="gainVal">0.85</span></label>
+        <input id="gain" type="range" min="0" max="1.00" step="0.01" value="0.85">
+        <div class="hint"><span data-i18n="gainHint">Adjust the playback volume.</span></div>
+      </div>
+      <div class="field">
+        <label><span data-i18n="loudnessTarget">Perceptual loudness target</span> <span class="val" id="normalizeVal">−10 dBFS equivalent</span></label>
+        <input id="normalizeTarget" type="range" min="-20" max="-3" step="1" value="-10">
+        <div class="hint"><span data-i18n="normalizeHint">Higher values make the sound louder.</span></div>
+      </div>
+      <div class="field">
+        <label><span data-i18n="equalLoudness">Equal-loudness reference</span></label>
+        <select id="loudnessPhon">
+          <option value="40">40 phon</option>
+          <option value="60" selected>60 phon</option>
+          <option value="80">80 phon</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2><span data-i18n="playbackSection">Playback</span></h2>
+      <div class="field">
+        <label><span data-i18n="stopTime">Auto-stop duration</span> <span class="val" id="autoStopSecondsVal">2.0 s</span></label>
+        <input id="autoStopSeconds" type="range" min="0.5" max="10" step="0.1" value="2">
+        <div class="hint"><span data-i18n="stopHint">Turn Auto stop off for continuous playback.</span></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2><span data-i18n="seriesSection">Coefficient bars</span></h2>
+      <div class="field">
+        <label class="check"><input id="showSeries" type="checkbox" checked><span data-i18n="showSeries">Show coefficient bars</span></label>
+      </div>
+      <div class="hint"><span data-i18n="seriesHint">DC is in the center; negative rotations are on the left and positive rotations on the right. Orders outside the current cutoff are dimmed.</span></div>
+    </section>
+
+  </div>
+</aside>
+
+
+<div class="aboutOverlay" id="aboutOverlay" aria-hidden="true" inert>
+  <section class="aboutCard" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+    <div class="aboutHead">
+      <strong id="aboutTitle"><span data-i18n="about">About</span></strong>
+      <button id="closeAbout" class="closeBtn" aria-label="Close" data-i18n-aria="close">×</button>
+    </div>
+    <div class="aboutBody">
+      <h3><span data-i18n="aboutDemo">About this demo</span></h3>
+      <p><span data-i18n="aboutDemoText">Font outlines are reconstructed with rotating circles. The same Fourier coefficients also produce stereo sound.</span></p>
+      <h3><span data-i18n="aboutNormalization">Sound</span></h3>
+      <p><span data-i18n="aboutNormalizationText">Loudness correction helps keep different characters at a similar perceived volume.</span></p>
+      <h3><span data-i18n="resources">Links &amp; credits</span></h3>
+      <ul>
+        <li><a href="https://github.com/akeit0/FontFourier" target="_blank" rel="noopener noreferrer"><span data-i18n="sourceCode">Source code</span></a></li>
+        <li><a href="https://github.com/akeit0/FontFourier/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer"><span data-i18n="creditsLink">Licenses and references</span></a></li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+<div id="fontProbe" class="fontProbe">A</div>
+<canvas id="raster" style="display:none"></canvas>
+
+<script defer src="./assets/i18n.js"></script>
+<script defer src="./assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "font-fourier",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Font contours as Fourier epicycles and stereo audio",
+  "license": "Unlicense",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "check": "node scripts/check.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/app.test.mjs",
+    "thumbnail": "node scripts/thumbnail.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
