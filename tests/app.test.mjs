@@ -105,6 +105,111 @@ test('font loading failures show an error and allow retry', async () => {
   } finally { await session.close(); }
 });
 
+test('unsupported characters use fallback outlines with a translated status outside the canvas', async () => {
+  const session=await browserSession();
+  try{
+    const page=await initializedPage(session);
+    await page.locator('#text').fill('あ');
+    await page.locator('#mainAction').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().busy);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,true);
+    assert.equal(await page.locator('#notice').isVisible(),false);
+    assert.match(await page.locator('#status').innerText(),/^Fallback font/);
+    assert.match(await page.locator('#status').getAttribute('title'),/Roboto.*あ.*browser’s fallback font/);
+    assert.ok(!/network error/i.test(await page.locator('#status').innerText()));
+    assert.ok((await page.evaluate(()=>window.__test.snapshot())).contours>0);
+    await page.locator('#mainAction').click();
+    await page.locator('#language').selectOption('ja');
+    assert.equal(await page.locator('#notice').isVisible(),false);
+    assert.match(await page.locator('#status').innerText(),/^代替フォント/);
+    assert.match(await page.locator('#status').getAttribute('title'),/Robotoに「あ」がないため/);
+    await page.locator('#text').fill('Aあ');
+    await page.locator('#mainAction').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().busy);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,true);
+    assert.match(await page.locator('#status').getAttribute('title'),/「あ」/);
+    await page.locator('#mainAction').click();
+    await page.locator('#fontPreset').selectOption('Noto Sans JP');
+    await page.locator('#mainAction').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().busy);
+    assert.equal(await page.locator('#notice').isVisible(),false);
+    assert.ok(!/代替フォント/.test(await page.locator('#status').innerText()));
+    assert.ok((await page.evaluate(()=>window.__test.snapshot())).contours>0);
+    await page.locator('#mainAction').click();
+  }finally{await session.close()}
+});
+
+test('Egyptian hieroglyphs retain the browser’s native fallback outlines', async () => {
+  const session=await browserSession();
+  try{
+    const page=await initializedPage(session);
+    await page.locator('#text').fill('𓄿');
+    await page.locator('#mainAction').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().busy);
+    const state=await page.evaluate(()=>window.__test.snapshot());
+    assert.equal(state.playing,true);
+    assert.equal(state.text,'𓄿');
+    assert.ok(state.contours>0);
+    assert.equal(await page.locator('#notice').isVisible(),false);
+    assert.match(await page.locator('#status').getAttribute('title'),/Roboto.*𓄿.*browser’s fallback font/);
+    const nativePixelsMatch=await page.evaluate(()=>{
+      const actual=document.querySelector('#raster'),ctx=actual.getContext('2d');
+      const reference=document.createElement('canvas');
+      reference.width=actual.width;reference.height=actual.height;
+      const native=reference.getContext('2d',{willReadFrequently:true});
+      native.font='400 260px "Roboto",sans-serif';
+      native.fillStyle='#fff';native.textBaseline='alphabetic';
+      const ascent=Math.ceil(native.measureText('𓄿').actualBoundingBoxAscent||260*.82);
+      native.fillText('𓄿',34,34+ascent);
+      const first=ctx.getImageData(0,0,actual.width,actual.height).data;
+      const second=native.getImageData(0,0,actual.width,actual.height).data;
+      return first.every((value,i)=>value===second[i]);
+    });
+    assert.equal(nativePixelsMatch,true);
+    await page.locator('#mainAction').click();
+  }finally{await session.close()}
+});
+
+test('text without visible outlines shows a prominent error, clears old contours and allows recovery', async () => {
+  const session=await browserSession({viewport:{width:320,height:844}});
+  try{
+    const page=await initializedPage(session);
+    await page.locator('#text').fill('\u200B');
+    await page.locator('#mainAction').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().busy);
+    const state=await page.evaluate(()=>window.__test.snapshot());
+    assert.equal(state.playing,false);assert.equal(state.contours,0);
+    assert.equal(await page.locator('#notice').getAttribute('role'),'alert');
+    assert.match(await page.locator('#noticeMessage').innerText(),/No visible contours found/);
+    assert.equal(await page.locator('#notice').isVisible(),true);
+    const bounds=await page.locator('#notice').boundingBox();
+    assert.ok(bounds.x>=0&&bounds.x+bounds.width<=320);
+    await page.locator('#language').selectOption('ja');
+    assert.match(await page.locator('#noticeMessage').innerText(),/表示できる輪郭がありません/);
+    await page.locator('#text').fill('A');
+    await page.locator('#mainAction').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().busy);
+    assert.equal(await page.locator('#notice').isVisible(),false);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,true);
+    await page.locator('#mainAction').click();
+  }finally{await session.close()}
+});
+
+test('font binary download failures display connection guidance rather than raw NetworkError', async () => {
+  const session=await browserSession();
+  try{
+    const page=await initializedPage(session);
+    await page.route('https://fonts.gstatic.com/**',route=>route.abort());
+    await page.locator('#text').fill('Z');
+    await page.locator('#mainAction').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().busy);
+    assert.match(await page.locator('#noticeMessage').innerText(),/Could not download Roboto.*connection/);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,false);
+    await page.locator('#language').selectOption('ja');
+    assert.match(await page.locator('#noticeMessage').innerText(),/Robotoをダウンロードできませんでした/);
+  }finally{await session.close()}
+});
+
 for(const [locale,language,glyph,family] of [
   ['ja-JP','ja','あ','Noto Sans JP'], ['en-US','en','A','Roboto'],
 ]) {

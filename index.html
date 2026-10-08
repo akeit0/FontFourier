@@ -60,6 +60,10 @@ input:focus,select:focus{border-color:#4c647f}
 .iconBtn:hover{background:#23262b;border-color:#45484f;color:#eef0f4}
 .iconBtn:focus-visible{outline:2px solid #91959c;outline-offset:2px}
 .stage{position:relative;min-height:0;overflow:hidden}
+.notice{position:absolute;z-index:2;top:40%;left:50%;transform:translate(-50%,-50%);width:min(640px,calc(100% - 24px));padding:16px 18px;border:1px solid #755052;border-radius:12px;background:#261b1e;color:#eee8d9;font-size:14px;line-height:1.6;overflow-wrap:anywhere;box-shadow:0 6px 24px #0006}
+.notice[hidden]{display:none}
+.notice strong{display:block;font-size:16px;margin-bottom:6px}
+.notice p{margin:0}
 .repoLink{
   display:grid;place-items:center;padding:0;text-decoration:none
 }
@@ -245,6 +249,7 @@ input[type="range"]{padding:0}
   </header>
 
   <main class="stage">
+    <div id="notice" class="notice" role="alert" hidden><strong id="noticeTitle"></strong><p id="noticeMessage"></p></div>
     <canvas id="view" role="img" aria-label="Fourier epicycles of font contours" data-i18n-aria="canvasLabel"></canvas>
     <div class="seriesPanel" id="seriesPanel">
       <div class="seriesHead">
@@ -408,6 +413,8 @@ input[type="range"]{padding:0}
 <canvas id="raster" style="display:none"></canvas>
 
 <script defer src="./assets/i18n.js"></script>
+<script defer src="./assets/glyph-probes.js"></script>
+<script defer src="./assets/glyph-check.js"></script>
 <script defer src="./assets/app.js"></script>
 </body>
 </html>

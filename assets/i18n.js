@@ -1,6 +1,10 @@
 (() => {
 const messages = {
   "en": {
+    "fontErrorTitle": "Could not display this text",
+    "fontFallbackStatus": "Fallback font",
+    "fontFallback": "{family} does not include “{characters}”. Using the browser’s fallback font for display and analysis.",
+    "fontFileError": "Could not download {family}. Check your connection and try again.",
     "githubLink": "View source on GitHub",
     "contourLibraryError": "Could not prepare the visualization. Check your internet connection and reload.",
     "sansJP": "Sans — Noto Sans JP",
@@ -74,7 +78,7 @@ const messages = {
     "fontCssError": "Could not load Google Fonts CSS",
     "fontEmpty": "Font family is empty",
     "fontLoadError": "Could not confirm loading of {family} {weight}",
-    "contourError": "No contours found. Please enter visible text.",
+    "contourError": "No visible contours found. Try another character or font.",
     "seconds": "{value} s",
     "secondsSpaced": "{value} s",
     "off": "OFF",
@@ -84,6 +88,10 @@ const messages = {
     "creditsLink": "Licenses and references"
   },
   "ja": {
+    "fontErrorTitle": "この文字を表示できません",
+    "fontFallbackStatus": "代替フォント",
+    "fontFallback": "{family}に「{characters}」がないため、ブラウザの代替フォントで表示・解析しています。",
+    "fontFileError": "{family}をダウンロードできませんでした。接続を確認して、もう一度試してください。",
     "githubLink": "GitHubでソースコードを開く",
     "contourLibraryError": "描画を準備できませんでした。インターネット接続を確認して再読み込みしてください。",
     "sansJP": "ゴシック — Noto Sans JP",
@@ -157,7 +165,7 @@ const messages = {
     "fontCssError": "Google Fonts CSSを読み込めませんでした",
     "fontEmpty": "フォント名が空です",
     "fontLoadError": "{family} {weight} の読込を確認できませんでした",
-    "contourError": "輪郭を抽出できませんでした。文字を入力してください。",
+    "contourError": "表示できる輪郭がありません。別の文字かフォントを試してください。",
     "seconds": "{value}秒",
     "secondsSpaced": "{value} 秒",
     "off": "OFF",

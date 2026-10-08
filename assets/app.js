@@ -15,6 +15,7 @@ const ui={
   aboutBtn:$("#aboutBtn"),aboutOverlay:$("#aboutOverlay"),closeAbout:$("#closeAbout"),
   customFont:$("#customFont"),addFont:$("#addFont"),fontProbe:$("#fontProbe"),
   mainAction:$("#mainAction"),status:$("#status"),playMode:$("#playMode"),
+  notice:$("#notice"),noticeTitle:$("#noticeTitle"),noticeMessage:$("#noticeMessage"),
   autoStop:$("#autoStop"),autoStopLabel:$("#autoStopLabel"),autoStopSeconds:$("#autoStopSeconds"),autoStopSecondsVal:$("#autoStopSecondsVal"),
   view:$("#view"),series:$("#series"),seriesPanel:$("#seriesPanel"),seriesCaption:$("#seriesCaption"),raster:$("#raster"),
   showGlyph:$("#showGlyph"),showContour:$("#showContour"),showRecon:$("#showRecon"),showCycles:$("#showCycles"),showSeries:$("#showSeries"),
@@ -28,7 +29,7 @@ const ui={
 let state={
   rawContours:[],data:[],prevData:[],transitionStart:0,sampleTimer:null,
   animT:0,lastTime:performance.now(),harmCurrent:+ui.harm.value,
-  analysisKey:"",rasterMeta:null,busy:false,fontLoadToken:0,statusKey:"ready",statusValues:{}
+  analysisKey:"",rasterMeta:null,busy:false,fontLoadToken:0,statusKey:"ready",statusValues:{},fontNotice:null
 };
 let audio={ctx:null,src:null,gain:null,stopTimer:null};
 
@@ -38,13 +39,28 @@ function setStatus(key, values={}){
   if(typeof rendered.message==="object"&&rendered.message){
     rendered.message=t(rendered.message.key,rendered.message.values);
   }
-  ui.status.textContent=t(key,rendered);
+  const fallback=key!=="error"&&state.fontNotice;
+  ui.status.textContent=(fallback?t("fontFallbackStatus")+" · ":"")+t(key,rendered);
+  ui.status.title=fallback?t(fallback.key,fallback.values):ui.status.textContent;
+  renderNotice();
+}
+function renderNotice(){
+  const notice=state.statusKey==="error"?state.statusValues.message:null;
+  ui.notice.hidden=!notice;
+  if(!notice)return;
+  ui.noticeTitle.textContent=t("fontErrorTitle");
+  ui.noticeMessage.textContent=typeof notice==="object"?t(notice.key,notice.values):notice;
 }
 function appError(key,values={}){
   const error=new Error(t(key,values));
   error.translation={key,values};return error;
 }
-function reportError(error){setStatus("error",{message:error.translation||error.message})}
+function reportError(error){
+  if(error.translation?.key==="contourError"){
+    state.rawContours=[];state.data=[];state.prevData=[];state.rasterMeta=null;state.analysisKey="";
+  }
+  setStatus("error",{message:error.translation||error.message});
+}
 function setLanguage(language){
   applyLanguage(language);ui.language.value=document.documentElement.lang;
   for(const option of ui.fontPreset.querySelectorAll('[data-custom-font]')){
@@ -132,6 +148,7 @@ async function ensureFont(){
   const family=currentFamily().trim(),weight=ui.weight.value,text=ui.text.value;
   if(!family)throw appError("fontEmpty");
   if(!text.trim())throw appError("contourError");
+  state.fontNotice=null;
 
   const token=++state.fontLoadToken;
   const old=document.querySelector("#dynamic-font");
@@ -139,7 +156,8 @@ async function ensureFont(){
 
   const link=document.createElement("link");
   link.id="dynamic-font";link.rel="stylesheet";
-  link.href=googleFontsHref(family,weight,text);
+  // A space keeps an entirely unsupported subset from producing an empty font file.
+  link.href=googleFontsHref(family,weight,text+" ");
   setStatus("loadingFont");
   const loaded=waitLinkLoad(link,token);
   document.head.appendChild(link);
@@ -154,24 +172,35 @@ async function ensureFont(){
   ui.fontProbe.style.fontWeight=weight;
   void ui.fontProbe.offsetWidth;
 
-  await document.fonts.load(`${weight} 260px "${family}"`,text);
-  await document.fonts.ready;
+  async function load(){
+    try{
+      await document.fonts.load(`${weight} 260px "${family}"`,text+" ");
+      await document.fonts.ready;
+    }catch{throw appError("fontFileError",{family})}
+  }
+  await load();
 
   let ok=document.fonts.check(`${weight} 260px "${family}"`,text);
   if(!ok){
     await new Promise(r=>setTimeout(r,80));
-    await document.fonts.load(`${weight} 260px "${family}"`,text);
+    await load();
     ok=document.fonts.check(`${weight} 260px "${family}"`,text);
   }
   await twoFrames();
   if(!ok)throw appError("fontLoadError",{family,weight});
+  const missing=await window.FontFourierGlyphCheck.missing([family],weight,text);
+  if(missing.length){
+    // Detect missing primary glyphs only; leave fallback selection to the browser.
+    state.fontNotice={key:"fontFallback",values:{family,characters:missing.join(" ")}};
+  }
   return{family,weight,text};
 }
 
 function rasterizeText(family,weight,text){
   const c=ui.raster,ctx=c.getContext("2d",{willReadFrequently:true});
   const fontPx=260,pad=34;
-  ctx.font=`${weight} ${fontPx}px "${family}", sans-serif`;
+  const font=`${weight} ${fontPx}px ${window.FontFourierGlyphCheck.cssFamily(family)},sans-serif`;
+  ctx.font=font;
   const m=ctx.measureText(text);
   const asc=Math.ceil(m.actualBoundingBoxAscent||fontPx*.82);
   const desc=Math.ceil(m.actualBoundingBoxDescent||fontPx*.24);
@@ -182,7 +211,7 @@ function rasterizeText(family,weight,text){
   ctx.clearRect(0,0,c.width,c.height);
   ctx.fillStyle="#fff";
   ctx.textBaseline="alphabetic";
-  ctx.font=`${weight} ${fontPx}px "${family}", sans-serif`;
+  ctx.font=font;
   const baseX=pad,baseline=pad+asc;
   ctx.fillText(text,baseX,baseline);
 
@@ -669,6 +698,7 @@ async function mainAction(){
 function invalidateAnalysis(message){
   if(isPlaying())stopAudio();
   state.analysisKey="";
+  state.fontNotice=null;
   setStatus(message||"changed");
 }
 
