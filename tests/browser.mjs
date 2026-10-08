@@ -18,11 +18,31 @@ export async function browserSession(options = {}) {
       contentType: 'text/javascript',
       body: app.replace(/\}\)\(\);\s*$/, `\nwindow.__test = {
         snapshot: () => ({ text: state.rasterMeta?.text, contours: state.data.length,
-          key: state.analysisKey, busy: state.busy, context: !!audio.ctx, playing: isPlaying() }),
+          key: state.analysisKey, busy: state.busy, context: !!audio.ctx, playing: isPlaying(),
+          samples:state.data[0]?.sampled.length,transitioning:!!state.transitionStart }),
         output: () => { const {L,R}=buildAudioCycle(); const gain=outputGainValue();
           return { peak: Math.max(...L.map(x=>Math.abs(x*gain)), ...R.map(x=>Math.abs(x*gain))),
             rms: Math.sqrt([...L,...R].reduce((sum,x)=>sum+(x*gain)**2,0)/(L.length+R.length)) }; },
         analyzeGlyph: async text => { ui.text.value=text;await analyze(); },
+        fourierData: () => state.data.map(({sampled,coeffs})=>({sampled,coeffs})),
+        chain: (index,t,cutoff) => epicycleChain(state.data[index].coeffs,t,cutoff),
+        render: ({cutoff=+ui.harm.value,time=.125,clear=false}={}) => {
+          state.harmCurrent=cutoff;state.animT=time;
+          if(clear){mainLayerKey=[];seriesKey=[]}
+          drawMain();drawSeries();
+          return {main:ui.view.toDataURL(),series:ui.series.toDataURL()};
+        },
+        benchmark: (frames=30) => {
+          state.harmCurrent=+ui.harm.value;
+          drawMain();drawSeries();
+          const samples=[];
+          for(let i=0;i<frames;i++){
+            state.animT=(state.animT+.001)%1;
+            const start=performance.now();drawMain();drawSeries();samples.push(performance.now()-start);
+          }
+          return {contours:state.data.length,mean:samples.reduce((a,b)=>a+b,0)/frames,
+            median:samples.slice().sort((a,b)=>a-b)[Math.floor(frames/2)]};
+        },
         thumbnail: () => {
           state.animT=.125;state.harmCurrent=40;drawMain();drawSeries();
           const {w,h,dpr}=resizeCanvas(ui.view),tf=fitTransform(w,h);

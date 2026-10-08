@@ -258,12 +258,20 @@ function resampleClosed(pts,n){
   return{points:out,length:total};
 }
 function normalizeGlobal(p,m){return{x:(p.x-m.cx)/m.scale,y:(p.y-m.cy)/m.scale}}
+let dftBasis;
 function dft(points,maxH){
   const N=points.length,out=[];
+  if(dftBasis?.N!==N||dftBasis.maxH!==maxH){
+    const cos=new Float64Array(N*(maxH*2+1)),sin=new Float64Array(cos.length);
+    for(let k=-maxH;k<=maxH;k++)for(let n=0;n<N;n++){
+      const i=(k+maxH)*N+n,a=-2*Math.PI*k*n/N;cos[i]=Math.cos(a);sin[i]=Math.sin(a);
+    }
+    dftBasis={N,maxH,cos,sin};
+  }
   for(let k=-maxH;k<=maxH;k++){
     let re=0,im=0;
     for(let n=0;n<N;n++){
-      const a=-2*Math.PI*k*n/N,ca=Math.cos(a),sa=Math.sin(a),x=points[n].x,y=points[n].y;
+      const i=(k+maxH)*N+n,ca=dftBasis.cos[i],sa=dftBasis.sin[i],x=points[n].x,y=points[n].y;
       re+=x*ca-y*sa;im+=x*sa+y*ca;
     }
     re/=N;im/=N;out.push({k,re,im,amp:Math.hypot(re,im),phase:Math.atan2(im,re)});
@@ -283,17 +291,30 @@ function evalSeries(coeffs,t,cutoff=state.harmCurrent){
   }
   return{x,y};
 }
+const chainCache=new WeakMap(),rotations={t:NaN,cos:new Float64Array(121),sin:new Float64Array(121)};
 function epicycleChain(coeffs,t,cutoff=state.harmCurrent){
-  const c0=coeffs.find(c=>c.k===0);let x=c0?.re||0,y=c0?.im||0;
-  const active=coeffs.filter(c=>c.k!==0&&coeffWeight(c.k,cutoff)>.001)
-    .map(c=>({...c,w:coeffWeight(c.k,cutoff)}))
-    .sort((a,b)=>(b.amp*b.w)-(a.amp*a.w));
-  const steps=[];
-  for(const c of active){
-    const r=c.amp*c.w,a=2*Math.PI*c.k*t+c.phase,x2=x+r*Math.cos(a),y2=y+r*Math.sin(a);
-    steps.push({x,y,r,x2,y2});x=x2;y=y2;
+  let chain=chainCache.get(coeffs);
+  if(!chain||chain.cutoff!==cutoff){
+    const active=coeffs.filter(c=>c.k!==0&&coeffWeight(c.k,cutoff)>.001)
+      .map(c=>({c,w:coeffWeight(c.k,cutoff)})).sort((a,b)=>b.c.amp*b.w-a.c.amp*a.w);
+    chain={cutoff,dc:coeffs.find(c=>c.k===0),active,
+      steps:active.map(({c,w})=>({x:0,y:0,r:c.amp*w,x2:0,y2:0})),end:{x:0,y:0}};
+    chainCache.set(coeffs,chain);
   }
-  return{steps,end:{x,y}};
+  if(rotations.t!==t){
+    rotations.t=t;
+    for(let k=0;k<=60;k++){
+      const a=2*Math.PI*k*t,ca=Math.cos(a),sa=Math.sin(a);
+      rotations.cos[60+k]=rotations.cos[60-k]=ca;
+      rotations.sin[60+k]=sa;rotations.sin[60-k]=-sa;
+    }
+  }
+  let x=chain.dc?.re||0,y=chain.dc?.im||0;
+  for(let i=0;i<chain.active.length;i++){
+    const {c,w}=chain.active[i],st=chain.steps[i],ca=rotations.cos[c.k+60],sa=rotations.sin[c.k+60];
+    st.x=x;st.y=y;x+=(c.re*ca-c.im*sa)*w;y+=(c.re*sa+c.im*ca)*w;st.x2=x;st.y2=y;
+  }
+  chain.end.x=x;chain.end.y=y;return chain;
 }
 function buildData(sampleCount){
   return state.rawContours.map(r=>{
@@ -320,8 +341,16 @@ async function analyze(){
   setStatus("analysisReady",{family,weight,count:out.rings.length});
 }
 
+const canvasGeometry=new WeakMap();
+const canvasObserver=new ResizeObserver(entries=>{
+  for(const {target,contentRect} of entries)canvasGeometry.set(target,{width:contentRect.width,height:contentRect.height});
+});
+canvasObserver.observe(ui.view);canvasObserver.observe(ui.series);
+window.addEventListener("resize",()=>{canvasGeometry.delete(ui.view);canvasGeometry.delete(ui.series)});
 function resizeCanvas(canvas){
-  const r=canvas.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);
+  let r=canvasGeometry.get(canvas);
+  if(!r?.width||!r.height){r=canvas.getBoundingClientRect();canvasGeometry.set(canvas,r)}
+  const dpr=Math.min(2,devicePixelRatio||1);
   const w=Math.max(1,Math.round(r.width*dpr)),h=Math.max(1,Math.round(r.height*dpr));
   if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}
   return{w,h,dpr};
@@ -338,15 +367,37 @@ function drawPath(ctx,pts,tf,close=true){
   ctx.beginPath();pts.forEach((p,i)=>{const q=P(p,tf);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});
   if(close)ctx.closePath();ctx.stroke();
 }
+const reconstructionCache=new WeakMap();
+let reconstructionBasis;
+function reconstructionPath(cd,cutoff){
+  let cached=reconstructionCache.get(cd);
+  if(!cached||cached.cutoff!==cutoff){
+    if(!reconstructionBasis){
+      const cos=new Float64Array(121*301),sin=new Float64Array(cos.length);
+      for(let k=-60;k<=60;k++)for(let i=0;i<=300;i++){
+        const n=(k+60)*301+i,a=2*Math.PI*k*(i/300);cos[n]=Math.cos(a);sin[n]=Math.sin(a);
+      }
+      reconstructionBasis={cos,sin};
+    }
+    const active=cd.coeffs.map(c=>({c,w:coeffWeight(c.k,cutoff)})).filter(({w})=>w>0);
+    const path=new Path2D();
+    for(let i=0;i<=300;i++){
+      let x=0,y=0;
+      for(const {c,w} of active){
+        const n=(c.k+60)*301+i,ca=reconstructionBasis.cos[n],sa=reconstructionBasis.sin[n];
+        x+=(c.re*ca-c.im*sa)*w;y+=(c.re*sa+c.im*ca)*w;
+      }
+      i?path.lineTo(x,y):path.moveTo(x,y);
+    }
+    cached={cutoff,path};reconstructionCache.set(cd,cached);
+  }
+  return cached.path;
+}
 function drawDataReconstruction(ctx,data,tf,alpha=1){
   ctx.globalAlpha=alpha;
-  for(const cd of data){
-    ctx.beginPath();
-    for(let i=0;i<=300;i++){
-      const q=P(evalSeries(cd.coeffs,i/300),tf);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y);
-    }
-    ctx.stroke();
-  }
+  ctx.save();ctx.translate(tf.ox,tf.oy);ctx.scale(tf.s,tf.s);ctx.lineWidth/=tf.s;
+  for(const cd of data)ctx.stroke(reconstructionPath(cd,state.harmCurrent));
+  ctx.restore();
   ctx.globalAlpha=1;
 }
 function drawGlyphRaster(ctx,tf){
@@ -356,14 +407,57 @@ function drawGlyphRaster(ctx,tf){
   const b=P({x:(m.width-m.cx)/m.scale,y:(m.height-m.cy)/m.scale},tf);
   ctx.save();ctx.globalAlpha=.20;ctx.drawImage(ui.raster,a.x,a.y,b.x-a.x,b.y-a.y);ctx.restore();
 }
+const mainLayer=document.createElement("canvas");
+let mainLayerKey=[];
+function sameKey(first,second){return first.length===second.length&&first.every((value,i)=>value===second[i])}
 function drawMain(){
-  const {w,h}=resizeCanvas(ui.view),ctx=ui.view.getContext("2d");
+  const {w,h}=resizeCanvas(ui.view),ctx=ui.view.getContext("2d"),tf=fitTransform(w,h);
+  let alpha=1;
+  if(state.transitionStart){
+    alpha=Math.min(1,(performance.now()-state.transitionStart)/260);
+    if(alpha>=1){state.prevData=[];state.transitionStart=0}
+  }
+  const key=[w,h,tf.s,tf.ox,tf.oy,state.data,state.prevData,state.rasterMeta,
+    ui.showGlyph.checked,ui.showContour.checked,ui.showRecon.checked,ui.showCycles.checked,
+    ui.showRecon.checked?state.harmCurrent:0,ui.showRecon.checked?alpha:1,t("emptyStage")];
+  const changed=!sameKey(mainLayerKey,key);
+  if(changed){
+    mainLayerKey=key;
+    if(mainLayer.width!==w||mainLayer.height!==h){mainLayer.width=w;mainLayer.height=h}
+    drawMainLayer(mainLayer.getContext("2d"),w,h,tf,alpha);
+  }
+  if(!changed&&(!ui.showCycles.checked||!state.data.length))return;
+  ctx.drawImage(mainLayer,0,0);
+  if(ui.showCycles.checked&&state.data[0]){
+    const ds=ui.cycleTarget.value==="all"?state.data:state.data.slice(0,1);
+    const thick=+ui.cycleThickness.value,ends=[];
+    ctx.strokeStyle="#94a3b8";ctx.lineWidth=Math.max(.8,w/1200)*thick;ctx.globalAlpha=.48;
+    for(const cd of ds){
+      const chain=epicycleChain(cd.coeffs,state.animT);ends.push(chain.end);
+      // One stroke per contour batches its circles and spokes into a single draw call.
+      ctx.beginPath();
+      for(const st of chain.steps){
+        const x=st.x*tf.s+tf.ox,y=st.y*tf.s+tf.oy,r=st.r*tf.s;
+        ctx.moveTo(x+r,y);ctx.arc(x,y,r,0,Math.PI*2);
+        ctx.moveTo(x,y);ctx.lineTo(st.x2*tf.s+tf.ox,st.y2*tf.s+tf.oy);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha=1;ctx.fillStyle="#fff";ctx.beginPath();
+    for(const end of ends){
+      const x=end.x*tf.s+tf.ox,y=end.y*tf.s+tf.oy,r=Math.max(2.5,2.3*thick);
+      ctx.moveTo(x+r,y);ctx.arc(x,y,r,0,Math.PI*2);
+    }
+    ctx.fill();
+  }
+}
+function drawMainLayer(ctx,w,h,tf,alpha){
   ctx.clearRect(0,0,w,h);ctx.fillStyle="#090c11";ctx.fillRect(0,0,w,h);
   if(!state.data.length){
     ctx.fillStyle="#66738b";ctx.textAlign="center";ctx.font=`${Math.max(14,w/55)}px system-ui`;
     ctx.fillText(t("emptyStage"),w/2,h/2);return;
   }
-  const tf=fitTransform(w,h);drawGlyphRaster(ctx,tf);
+  drawGlyphRaster(ctx,tf);
 
   if(ui.showContour.checked){
     ctx.strokeStyle="#7dd3fc";ctx.lineWidth=Math.max(1,w/1000);ctx.globalAlpha=.68;
@@ -372,31 +466,8 @@ function drawMain(){
   }
   if(ui.showRecon.checked){
     ctx.strokeStyle="#c4b5fd";ctx.lineWidth=Math.max(1.35,w/760);
-    let a=1;
-    if(state.transitionStart){
-      a=Math.min(1,(performance.now()-state.transitionStart)/260);
-      if(a>=1){state.prevData=[];state.transitionStart=0}
-    }
-    if(state.prevData.length)drawDataReconstruction(ctx,state.prevData,tf,1-a);
-    drawDataReconstruction(ctx,state.data,tf,a);
-  }
-  if(ui.showCycles.checked&&state.data[0]){
-    const ds=ui.cycleTarget.value==="all"?state.data:state.data.slice(0,1);
-    const thick=+ui.cycleThickness.value;
-    ctx.strokeStyle="#94a3b8";ctx.lineWidth=Math.max(.8,w/1200)*thick;ctx.globalAlpha=.48;
-    for(const cd of ds){
-      const chain=epicycleChain(cd.coeffs,state.animT);
-      for(const st of chain.steps){
-        const c=P({x:st.x,y:st.y},tf),e=P({x:st.x2,y:st.y2},tf);
-        ctx.beginPath();ctx.arc(c.x,c.y,st.r*tf.s,0,Math.PI*2);ctx.stroke();
-        ctx.beginPath();ctx.moveTo(c.x,c.y);ctx.lineTo(e.x,e.y);ctx.stroke();
-      }
-    }
-    ctx.globalAlpha=1;
-    for(const cd of ds){
-      const e=P(epicycleChain(cd.coeffs,state.animT).end,tf);
-      ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(e.x,e.y,Math.max(2.5,2.3*thick),0,Math.PI*2);ctx.fill();
-    }
+    if(state.prevData.length)drawDataReconstruction(ctx,state.prevData,tf,1-alpha);
+    drawDataReconstruction(ctx,state.data,tf,alpha);
   }
 }
 
@@ -410,13 +481,19 @@ function aggregateSeries(){
   }
   return[...byK].map(([k,amp])=>({k,amp})).sort((a,b)=>a.k-b.k);
 }
+let seriesKey=[];
 function drawSeries(){
-  ui.seriesPanel.style.display=ui.showSeries.checked?"block":"none";
+  const display=ui.showSeries.checked?"block":"none";
+  if(ui.seriesPanel.style.display!==display)ui.seriesPanel.style.display=display;
   if(!ui.showSeries.checked)return;
   const {w,h}=resizeCanvas(ui.series),ctx=ui.series.getContext("2d");
+  const caption=t(ui.cycleTarget.value==="all"?"allContours":"largestContour");
+  const key=[w,h,state.data,ui.cycleTarget.value,state.harmCurrent,caption];
+  if(sameKey(seriesKey,key))return;
+  seriesKey=key;
   ctx.clearRect(0,0,w,h);
   const arr=aggregateSeries();
-  ui.seriesCaption.textContent=t(ui.cycleTarget.value==="all"?"allContours":"largestContour");
+  ui.seriesCaption.textContent=caption;
   if(!arr.length)return;
   const maxAmp=Math.max(...arr.filter(d=>d.k!==0).map(d=>d.amp),1e-6),barW=w/arr.length;
   for(let i=0;i<arr.length;i++){
@@ -436,7 +513,9 @@ function drawSeries(){
 function animate(now){
   const dt=Math.min(.05,(now-state.lastTime)/1000);state.lastTime=now;
   state.animT=(state.animT+dt*(+ui.speed.value))%1;
-  state.harmCurrent+=(+ui.harm.value-state.harmCurrent)*(1-Math.pow(.001,dt));
+  const target=+ui.harm.value;
+  state.harmCurrent+=(target-state.harmCurrent)*(1-Math.pow(.001,dt));
+  if(Math.abs(target-state.harmCurrent)<.0001)state.harmCurrent=target;
   drawMain();drawSeries();requestAnimationFrame(animate);
 }
 

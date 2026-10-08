@@ -195,6 +195,100 @@ test('text without visible outlines shows a prominent error, clears old contours
   }finally{await session.close()}
 });
 
+test('complex contours keep identical Fourier coefficients and epicycle positions', async () => {
+  const session=await browserSession();
+  try{
+    const page=await initializedPage(session);
+    await page.locator('#fontPreset').selectOption('Noto Sans JP');
+    await page.evaluate(()=>window.__test.analyzeGlyph('龘鬱龍'));
+    const data=await page.evaluate(()=>window.__test.fourierData());
+    assert.ok(data.length>20);
+    for(const {sampled,coeffs} of data)for(const c of coeffs){
+      let re=0,im=0;
+      for(let n=0;n<sampled.length;n++){
+        const a=-2*Math.PI*c.k*n/sampled.length,ca=Math.cos(a),sa=Math.sin(a),{x,y}=sampled[n];
+        re+=x*ca-y*sa;im+=x*sa+y*ca;
+      }
+      assert.ok(Math.abs(c.re-re/sampled.length)<1e-12);
+      assert.ok(Math.abs(c.im-im/sampled.length)<1e-12);
+    }
+    for(const cutoff of [5.25,40,60])for(const time of [.071,.24,.8]){
+      const actual=await page.evaluate(({time,cutoff})=>window.__test.chain(0,time,cutoff),{time,cutoff});
+      const weight=k=>{
+        if(!k)return 1;
+        const u=Math.max(0,Math.min(1,(Math.abs(k)-cutoff+.55)/1.1));
+        return 1-u*u*(3-2*u);
+      };
+      const dc=data[0].coeffs.find(c=>!c.k);
+      let x=dc.re,y=dc.im;
+      const active=data[0].coeffs.filter(c=>c.k&&weight(c.k)>.001)
+        .sort((a,b)=>b.amp*weight(b.k)-a.amp*weight(a.k));
+      assert.equal(actual.steps.length,active.length);
+      for(let i=0;i<active.length;i++){
+        const c=active[i],r=c.amp*weight(c.k),a=2*Math.PI*c.k*time+c.phase;
+        assert.ok(Math.hypot(actual.steps[i].x-x,actual.steps[i].y-y)<1e-12);
+        x+=r*Math.cos(a);y+=r*Math.sin(a);
+        assert.ok(Math.hypot(actual.steps[i].x2-x,actual.steps[i].y2-y)<1e-12);
+      }
+      assert.ok(Math.hypot(actual.end.x-x,actual.end.y-y)<1e-12);
+    }
+  }finally{await session.close()}
+});
+
+test('cached rendering avoids repeated Fourier work and updates controls, sampling, language and size', async () => {
+  const session=await browserSession();
+  try{
+    const page=await initializedPage(session);
+    await page.locator('#fontPreset').selectOption('Noto Sans JP');
+    await page.evaluate(()=>window.__test.analyzeGlyph('龘鬱龍'));
+    const initial=await page.evaluate(()=>window.__test.render());
+    const frameWork=await page.evaluate(()=>{
+      const ctx=document.querySelector('#view').getContext('2d'),stroke=ctx.stroke;
+      const sin=Math.sin,cos=Math.cos;let calls=0,strokes=0;
+      Math.sin=x=>{calls++;return sin(x)};Math.cos=x=>{calls++;return cos(x)};
+      ctx.stroke=function(...args){strokes++;return stroke.apply(this,args)};
+      try{window.__test.render({time:.2})}finally{Math.sin=sin;Math.cos=cos;ctx.stroke=stroke}
+      return {calls,strokes,contours:window.__test.snapshot().contours};
+    });
+    assert.ok(frameWork.calls<=122,`Steady frame used ${frameWork.calls} trig calls`);
+    assert.ok(frameWork.strokes<=frameWork.contours,`Steady frame submitted ${frameWork.strokes} strokes`);
+    await page.locator('#showCycles').evaluate(element=>{element.checked=false});
+    const withoutCircles=await page.evaluate(()=>window.__test.render());
+    assert.notEqual(initial.main,withoutCircles.main);
+    async function matchesFresh(options={}){
+      const cached=await page.evaluate(options=>window.__test.render(options),options);
+      const fresh=await page.evaluate(options=>window.__test.render({...options,clear:true}),options);
+      assert.ok(cached.main===fresh.main,'Cached main canvas differs from a fresh draw');
+      assert.ok(cached.series===fresh.series,'Cached coefficients differ from a fresh draw');
+      return cached;
+    }
+    await matchesFresh();
+    const lowOrder=await matchesFresh({cutoff:10});
+    assert.notEqual(lowOrder.main,withoutCircles.main);
+    assert.notEqual(lowOrder.series,withoutCircles.series);
+    for(const id of ['showGlyph','showContour','showRecon']){
+      await page.locator(`#${id}`).evaluate(element=>{element.checked=!element.checked});
+      await matchesFresh();
+    }
+    await page.locator('#cycleTarget').selectOption('largest');
+    await matchesFresh();
+    await page.locator('#language').selectOption('ja');
+    await matchesFresh();
+    assert.equal(await page.locator('#seriesCaption').innerText(),'最大輪郭のみ');
+    await page.locator('#showSeries').evaluate(element=>{element.checked=false});
+    await matchesFresh();
+    await page.locator('#showSeries').evaluate(element=>{element.checked=true});
+    await page.setViewportSize({width:390,height:844});
+    await matchesFresh();
+    await page.locator('#settingsBtn').click();
+    await page.locator('#samples').fill('128');
+    await page.waitForFunction(()=>window.__test.snapshot().samples===128&&!window.__test.snapshot().transitioning);
+    await matchesFresh();
+    await page.evaluate(()=>window.__test.analyzeGlyph('𓄿'));
+    await matchesFresh();
+  }finally{await session.close()}
+});
+
 test('font binary download failures display connection guidance rather than raw NetworkError', async () => {
   const session=await browserSession();
   try{
