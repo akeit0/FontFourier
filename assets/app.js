@@ -19,7 +19,7 @@ const ui={
   autoStop:$("#autoStop"),autoStopLabel:$("#autoStopLabel"),autoStopSeconds:$("#autoStopSeconds"),autoStopSecondsVal:$("#autoStopSecondsVal"),
   view:$("#view"),series:$("#series"),seriesPanel:$("#seriesPanel"),seriesCaption:$("#seriesCaption"),raster:$("#raster"),
   showGlyph:$("#showGlyph"),showContour:$("#showContour"),showRecon:$("#showRecon"),showCycles:$("#showCycles"),showSeries:$("#showSeries"),
-  cycleTarget:$("#cycleTarget"),cycleThickness:$("#cycleThickness"),audioTarget:$("#audioTarget"),
+  cycleTarget:$("#cycleTarget"),cycleThickness:$("#cycleThickness"),audioTarget:$("#audioTarget"),soundMode:$("#soundMode"),
   harm:$("#harm"),harmVal:$("#harmVal"),samples:$("#samples"),sampleVal:$("#sampleVal"),
   speed:$("#speed"),speedVal:$("#speedVal"),freq:$("#freq"),freqVal:$("#freqVal"),
   gain:$("#gain"),gainVal:$("#gainVal"),normalizeTarget:$("#normalizeTarget"),
@@ -28,10 +28,48 @@ const ui={
 
 let state={
   rawContours:[],data:[],prevData:[],transitionStart:0,sampleTimer:null,
-  animT:0,lastTime:performance.now(),harmCurrent:+ui.harm.value,
-  analysisKey:"",rasterMeta:null,busy:false,fontLoadToken:0,statusKey:"ready",statusValues:{},fontNotice:null
+  animT:0,motionTime:0,lastTime:performance.now(),harmCurrent:+ui.harm.value,
+  analysisKey:"",rasterMeta:null,busy:false,fontLoadToken:0,analysisRevision:0,
+  analysisTimer:null,pendingAnalysis:false,fontAbort:null,composing:false,statusKey:"ready",statusValues:{},fontNotice:null
 };
-let audio={ctx:null,src:null,gain:null,stopTimer:null};
+let audio={ctx:null,src:null,gain:null,group:null,groups:new Set(),startedAt:0,elapsed:0,stopTimer:null};
+let pitchSignalCache=null;
+let waveformAutoStop=ui.autoStop.checked,lastSoundMode="waveform";
+const pitch=new window.FontFourierPitch.PitchCurves({
+  onChange:()=>{
+    updatePlayMode();
+    clearTimeout(pitch._timer);
+    if(isPlaying())pitch._timer=setTimeout(refreshAudioSmooth,70);
+  },
+  onPlay:mainAction,getTime:pitchTime,isPlaying,isBusy:()=>state.busy,
+  getFrequency:()=>+ui.freq.value,
+  setFrequency:value=>{ui.freq.value=value;ui.freq.dispatchEvent(new Event("input"))},
+  getSignals:pitchSignals,getRate:()=>+ui.speed.value,
+  getMaximumFrequency:()=>.46*(audio.ctx?.sampleRate||44100),
+  setRate:value=>{ui.speed.value=value;ui.speed.dispatchEvent(new Event("input"))},
+  getMode:()=>ui.soundMode.value,
+  setMode:value=>{ui.soundMode.value=value;ui.soundMode.dispatchEvent(new Event("change"))}
+});
+function pitchTime(){return isPlaying()?audio.elapsed+Math.max(0,audio.ctx.currentTime-audio.startedAt):state.motionTime}
+function pitchSignals(){
+  const cutoff=+ui.harm.value,target=ui.audioTarget.value;
+  if(pitchSignalCache?.data===state.data&&pitchSignalCache.cutoff===cutoff&&pitchSignalCache.target===target)return pitchSignalCache.values;
+  const len=4096,ds=selectedAudioData(),values=ds.map(()=>new Float32Array(len));
+  ds.forEach((cd,index)=>{
+    for(let i=0;i<len;i++){
+      const point=evalSeries(cd.coeffs,i/len,cutoff);
+      values[index][i]=point.y;
+    }
+  });
+  let peak=1e-9;
+  for(const samples of values){
+    const mean=samples.reduce((sum,value)=>sum+value,0)/len;
+    for(let i=0;i<len;i++){samples[i]-=mean;peak=Math.max(peak,Math.abs(samples[i]))}
+  }
+  for(const samples of values)for(let i=0;i<len;i++)samples[i]/=peak;
+  pitchSignalCache={data:state.data,cutoff,target,values};
+  return values;
+}
 
 function setStatus(key, values={}){
   state.statusKey=key;state.statusValues=values;
@@ -68,7 +106,7 @@ function setLanguage(language){
   }
   ui.mainAction.textContent=t(isPlaying()?"stop":"play");
   setStatus(state.statusKey,state.statusValues);
-  updateNormalizeUi();updateAutoStopUi();
+  updateNormalizeUi();updateAutoStopUi();pitch.updateLabels();
 }
 ui.language.addEventListener("change",()=>setLanguage(ui.language.value));
 function smoothstep(a,b,x){
@@ -130,11 +168,14 @@ function googleFontsHref(family,weight,text){
   const fam=family.trim().replace(/\s+/g,"+");
   return `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fam).replace(/%2B/g,"+")}:wght@${weight}&display=swap&text=${encodeURIComponent(text||"A")}`;
 }
-function waitLinkLoad(link,token){
+function waitLinkLoad(link,token,signal){
   return new Promise((resolve,reject)=>{
     const timer=setTimeout(()=>finish(appError("fontCssError")),15000);
+    const abort=()=>finish(new DOMException("Font request superseded","AbortError"));
+    signal.addEventListener("abort",abort,{once:true});
     function finish(error){
       clearTimeout(timer);link.onload=null;link.onerror=null;
+      signal.removeEventListener("abort",abort);
       error?reject(error):resolve();
     }
     link.onload=()=>finish(token===state.fontLoadToken?null:appError("fontCssError"));
@@ -151,6 +192,7 @@ async function ensureFont(){
   state.fontNotice=null;
 
   const token=++state.fontLoadToken;
+  const controller=new AbortController();state.fontAbort=controller;
   const old=document.querySelector("#dynamic-font");
   if(old)old.remove();
 
@@ -159,9 +201,10 @@ async function ensureFont(){
   // A space keeps an entirely unsupported subset from producing an empty font file.
   link.href=googleFontsHref(family,weight,text+" ");
   setStatus("loadingFont");
-  const loaded=waitLinkLoad(link,token);
+  const loaded=waitLinkLoad(link,token,controller.signal);
   document.head.appendChild(link);
   await loaded;
+  controller.signal.throwIfAborted();
 
   // iOS Safari対策:
   // 1) stylesheet load完了後にFontFaceSetへ明示ロード
@@ -187,6 +230,7 @@ async function ensureFont(){
     ok=document.fonts.check(`${weight} 260px "${family}"`,text);
   }
   await twoFrames();
+  controller.signal.throwIfAborted();
   if(!ok)throw appError("fontLoadError",{family,weight});
   const missing=await window.FontFourierGlyphCheck.missing([family],weight,text);
   if(missing.length){
@@ -331,7 +375,9 @@ function rebuildSamplesSmooth(){
 }
 
 async function analyze(){
+  const revision=state.analysisRevision,key=currentKey();
   const {family,weight,text}=await ensureFont();
+  if(revision!==state.analysisRevision||key!==currentKey())return false;
   setStatus("analyzing");
   const out=rasterizeText(family,weight,text);
   if(!out.rings.length)throw appError("contourError");
@@ -339,6 +385,7 @@ async function analyze(){
   state.prevData=[];state.data=buildData(+ui.samples.value);state.transitionStart=0;
   state.analysisKey=`${text}\n${family}\n${weight}`;state.animT=0;
   setStatus("analysisReady",{family,weight,count:out.rings.length});
+  return true;
 }
 
 const canvasGeometry=new WeakMap();
@@ -357,6 +404,7 @@ function resizeCanvas(canvas){
 }
 function fitTransform(w,h){
   const dpr=Math.min(2,devicePixelRatio||1);
+  if(pitch.isOpen())return{s:Math.min(w,h)*.80,ox:w/2,oy:h/2};
   const reserve=(ui.showSeries.checked?(window.innerWidth<=720?132:166):16)*dpr;
   const usableH=Math.max(80,h-reserve);
   return{s:Math.min(w*.80,usableH*.80),ox:w/2,oy:usableH/2};
@@ -429,11 +477,13 @@ function drawMain(){
   if(!changed&&(!ui.showCycles.checked||!state.data.length))return;
   ctx.drawImage(mainLayer,0,0);
   if(ui.showCycles.checked&&state.data[0]){
-    const ds=ui.cycleTarget.value==="all"?state.data:state.data.slice(0,1);
+    const ds=pitch.enabled?selectedAudioData():(ui.cycleTarget.value==="all"?state.data:state.data.slice(0,1));
+    const phase=pitch.enabled?pitch.phase(pitchTime()):state.animT;
     const thick=+ui.cycleThickness.value,ends=[];
-    ctx.strokeStyle="#94a3b8";ctx.lineWidth=Math.max(.8,w/1200)*thick;ctx.globalAlpha=.48;
-    for(const cd of ds){
-      const chain=epicycleChain(cd.coeffs,state.animT);ends.push(chain.end);
+    ctx.lineWidth=Math.max(.8,w/1200)*thick;ctx.globalAlpha=.48;
+    for(let index=0;index<ds.length;index++){
+      ctx.strokeStyle=pitch.enabled?pitch.color(index):"#94a3b8";
+      const chain=epicycleChain(ds[index].coeffs,phase);ends.push(chain.end);
       // One stroke per contour batches its circles and spokes into a single draw call.
       ctx.beginPath();
       for(const st of chain.steps){
@@ -443,8 +493,13 @@ function drawMain(){
       }
       ctx.stroke();
     }
-    ctx.globalAlpha=1;ctx.fillStyle="#fff";ctx.beginPath();
-    for(const end of ends){
+    ctx.globalAlpha=1;let color=null;ctx.beginPath();
+    for(let index=0;index<ends.length;index++){
+      const nextColor=pitch.enabled?pitch.color(index):"#fff",end=ends[index];
+      if(color!==nextColor){
+        if(color)ctx.fill();
+        ctx.beginPath();ctx.fillStyle=nextColor;color=nextColor;
+      }
       const x=end.x*tf.s+tf.ox,y=end.y*tf.s+tf.oy,r=Math.max(2.5,2.3*thick);
       ctx.moveTo(x+r,y);ctx.arc(x,y,r,0,Math.PI*2);
     }
@@ -483,9 +538,9 @@ function aggregateSeries(){
 }
 let seriesKey=[];
 function drawSeries(){
-  const display=ui.showSeries.checked?"block":"none";
+  const display=ui.showSeries.checked&&!pitch.isOpen()?"block":"none";
   if(ui.seriesPanel.style.display!==display)ui.seriesPanel.style.display=display;
-  if(!ui.showSeries.checked)return;
+  if(display==="none")return;
   const {w,h}=resizeCanvas(ui.series),ctx=ui.series.getContext("2d");
   const caption=t(ui.cycleTarget.value==="all"?"allContours":"largestContour");
   const key=[w,h,state.data,ui.cycleTarget.value,state.harmCurrent,caption];
@@ -513,10 +568,11 @@ function drawSeries(){
 function animate(now){
   const dt=Math.min(.05,(now-state.lastTime)/1000);state.lastTime=now;
   state.animT=(state.animT+dt*(+ui.speed.value))%1;
+  state.motionTime=isPlaying()?pitchTime():state.motionTime+dt;
   const target=+ui.harm.value;
   state.harmCurrent+=(target-state.harmCurrent)*(1-Math.pow(.001,dt));
   if(Math.abs(target-state.harmCurrent)<.0001)state.harmCurrent=target;
-  drawMain();drawSeries();requestAnimationFrame(animate);
+  drawMain();drawSeries();pitch.tick(now);requestAnimationFrame(animate);
 }
 
 function isPlaying(){return!!audio.src}
@@ -527,7 +583,8 @@ async function ensureAudio(){
 function selectedAudioData(){return ui.audioTarget.value==="largest"?state.data.slice(0,1):state.data}
 function audioHarmonicLimit(){
   const sr=audio.ctx?.sampleRate||48000;
-  const f0=Math.max(1,+ui.freq.value);
+  const maximumOffset=Math.max(0,...pitch.activeCurves().map(curve=>curve.offset+curve.depth));
+  const f0=Math.max(1,+ui.freq.value)*2**(maximumOffset/12);
   // Keep synthesis and loudness estimation on the same, alias-safe harmonic set.
   return Math.max(1,Math.min(60,+ui.harm.value,Math.floor((sr*0.46)/f0)));
 }
@@ -696,93 +753,134 @@ function outputGainValue(){
   return Math.max(0,+ui.gain.value);
 }
 function updatePlayMode(){
-  ui.playMode.textContent=`${ui.freq.value} Hz / EL ${ui.loudnessPhon.value} phon`;
+  ui.playMode.textContent=pitch.enabled?t("pitchActive",{count:selectedAudioData().length,frequency:ui.freq.value}):`${ui.freq.value} Hz / EL ${ui.loudnessPhon.value} phon`;
+  pitch.updateTransport();
 }
 function clearStopTimer(){if(audio.stopTimer){clearTimeout(audio.stopTimer);audio.stopTimer=null}}
 function scheduleAutoStop(){
   clearStopTimer();
-  if(!isPlaying()||!ui.autoStop.checked)return;
+  if(!isPlaying()||pitch.enabled||!ui.autoStop.checked)return;
   const ms=(+ui.autoStopSeconds.value)*1000;
   audio.stopTimer=setTimeout(()=>stopAudio(.16),Math.max(80,ms-150));
 }
 function stopAudio(fade=.09){
   clearStopTimer();
   if(!audio.src)return;
-  const src=audio.src,g=audio.gain,ctx=audio.ctx;
-  audio.src=null;audio.gain=null;
-  try{
-    const now=ctx.currentTime;
-    g.gain.cancelScheduledValues(now);
-    g.gain.setValueAtTime(Math.max(.0001,g.gain.value),now);
-    g.gain.exponentialRampToValueAtTime(.0001,now+fade);
-    src.stop(now+fade+.02);
-  }catch{}
+  state.motionTime=pitchTime();
+  const group=audio.group;
+  audio.src=null;audio.gain=null;audio.group=null;
+  fadeAudioGroup(group,fade);
   ui.mainAction.textContent=t("play");
+  pitch.updateTransport();
   if(!state.busy)setStatus("stopped");
+}
+function createAudioGroup(fade){
+  const len=4096;let buf=null;
+  if(!pitch.enabled){
+    const {L,R}=buildAudioCycle(len);
+    buf=audio.ctx.createBuffer(2,len,audio.ctx.sampleRate);
+    buf.copyToChannel(L,0);buf.copyToChannel(R,1);
+  }
+  const curves=pitch.activeCurves(),ctx=audio.ctx,now=ctx.currentTime+.01;
+  const group={gain:ctx.createGain(),voices:[],remaining:curves.length,startedAt:now};
+  group.gain.gain.setValueAtTime(0,now);
+  const amplitude=pitch.enabled?Math.min(.97,Math.SQRT2*Math.pow(10,(+ui.normalizeTarget.value+10)/20)):1;
+  group.gain.gain.linearRampToValueAtTime(amplitude*outputGainValue()/curves.length,now+fade);
+  group.gain.connect(ctx.destination);audio.groups.add(group);
+  const time=audio.elapsed+Math.max(0,now-audio.startedAt);
+  for(const curve of curves){
+    const src=pitch.enabled?ctx.createOscillator():ctx.createBufferSource();
+    let motion=null;
+    if(pitch.enabled){
+      src.type="sine";src.frequency.value=+ui.freq.value;
+      motion=window.FontFourierPitch.connectPitchCurve(ctx,src,curve,time,now);
+    }else{
+      src.buffer=buf;src.loop=true;src.playbackRate.value=(+ui.freq.value)*len/ctx.sampleRate;
+    }
+    src.onended=()=>{
+      src.disconnect();
+      if(motion){motion.source.stop();motion.source.disconnect();motion.depth.disconnect()}
+      if(--group.remaining===0){group.gain.disconnect();audio.groups.delete(group)}
+    };
+    src.connect(group.gain);src.start(now);group.voices.push({src,motion});
+  }
+  return group;
+}
+function fadeAudioGroup(group,fade,now=audio.ctx.currentTime){
+  group.gain.gain.cancelAndHoldAtTime(now);
+  group.gain.gain.linearRampToValueAtTime(0,now+fade);
+  for(const voice of group.voices)voice.src.stop(now+fade+.02);
 }
 async function playAudio(){
   await ensureAudio();clearStopTimer();
-  const len=4096,{L,R}=buildAudioCycle(len);
-  const buf=audio.ctx.createBuffer(2,len,audio.ctx.sampleRate);
-  buf.copyToChannel(L,0);buf.copyToChannel(R,1);
-
-  const src=audio.ctx.createBufferSource();src.buffer=buf;src.loop=true;
-  src.playbackRate.value=(+ui.freq.value)*len/audio.ctx.sampleRate;
-
-  const gain=audio.ctx.createGain(),now=audio.ctx.currentTime,target=outputGainValue();
-  gain.gain.setValueAtTime(.0001,now);gain.gain.linearRampToValueAtTime(target,now+.035);
-  src.connect(gain).connect(audio.ctx.destination);src.start();
-  audio.src=src;audio.gain=gain;
+  audio.startedAt=audio.ctx.currentTime;audio.elapsed=state.motionTime;
+  const group=createAudioGroup(.035);
+  audio.group=group;audio.src=group.voices[0].src;audio.gain=group.gain;
   ui.mainAction.textContent=t("stop");updatePlayMode();
-  setStatus("playing",{phon:ui.loudnessPhon.value});
+  setStatus(pitch.enabled?"pitchPlaying":"playing",{phon:ui.loudnessPhon.value});
   scheduleAutoStop();
 }
 async function refreshAudioSmooth(){
   if(!isPlaying())return;
-  const oldSrc=audio.src,oldGain=audio.gain;
-  const len=4096,{L,R}=buildAudioCycle(len);
-  const buf=audio.ctx.createBuffer(2,len,audio.ctx.sampleRate);
-  buf.copyToChannel(L,0);buf.copyToChannel(R,1);
-
-  const src=audio.ctx.createBufferSource();src.buffer=buf;src.loop=true;
-  src.playbackRate.value=(+ui.freq.value)*len/audio.ctx.sampleRate;
-  const g=audio.ctx.createGain(),now=audio.ctx.currentTime,target=outputGainValue();
-  g.gain.setValueAtTime(.0001,now);g.gain.linearRampToValueAtTime(target,now+.07);
-  src.connect(g).connect(audio.ctx.destination);src.start();
-
-  try{
-    oldGain.gain.cancelScheduledValues(now);
-    oldGain.gain.setValueAtTime(Math.max(.0001,oldGain.gain.value),now);
-    oldGain.gain.exponentialRampToValueAtTime(.0001,now+.07);
-    oldSrc.stop(now+.09);
-  }catch{}
-  audio.src=src;audio.gain=g;updatePlayMode();
+  const oldGroup=audio.group,group=createAudioGroup(.07);
+  fadeAudioGroup(oldGroup,.07,group.startedAt);
+  audio.group=group;audio.src=group.voices[0].src;audio.gain=group.gain;updatePlayMode();
 }
 async function mainAction(){
-  if(state.busy)return;
   if(isPlaying()){stopAudio();return}
-  state.busy=true;ui.mainAction.disabled=true;
+  if(state.busy)return;
+  clearTimeout(state.analysisTimer);state.analysisTimer=null;state.pendingAnalysis=false;
+  setAnalysisBusy(true);
   try{
     await ensureContours();
     await ensureAudio();
-    if(state.analysisKey!==currentKey()||!state.data.length)await analyze();
+    if((state.analysisKey!==currentKey()||!state.data.length)&&!await analyze())return;
     await playAudio();
   }catch(e){
-    console.error(e);reportError(e);
+    if(e.name!=="AbortError"){console.error(e);reportError(e)}
   }finally{
-    state.busy=false;ui.mainAction.disabled=false;
+    setAnalysisBusy(false);
     if(!isPlaying())ui.mainAction.textContent=t("play");
+    pitch.updateTransport();
   }
 }
 function invalidateAnalysis(message){
-  if(isPlaying())stopAudio();
+  state.analysisRevision++;state.pendingAnalysis=true;
+  state.fontAbort?.abort();
   state.analysisKey="";
   state.fontNotice=null;
   setStatus(message||"changed");
+  clearTimeout(state.analysisTimer);
+  state.analysisTimer=state.composing?null:setTimeout(updateGlyph,300);
+}
+function setAnalysisBusy(busy){
+  state.busy=busy;ui.mainAction.disabled=busy&&!isPlaying();pitch.updateTransport();
+  if(!busy&&state.pendingAnalysis&&!state.analysisTimer&&!state.composing)state.analysisTimer=setTimeout(updateGlyph,0);
+}
+async function updateGlyph(){
+  state.analysisTimer=null;
+  if(state.busy||state.composing||!state.pendingAnalysis)return;
+  state.pendingAnalysis=false;
+  const revision=state.analysisRevision;
+  setAnalysisBusy(true);
+  try{
+    await ensureContours();
+    if(await analyze()){
+      pitch.updateLabels();updatePlayMode();
+      if(isPlaying()){
+        await refreshAudioSmooth();
+        setStatus(pitch.enabled?"pitchPlaying":"playing",{phon:ui.loudnessPhon.value});
+      }
+    }
+  }catch(error){
+    if(error.name!=="AbortError"&&revision===state.analysisRevision)reportError(error);
+  }finally{setAnalysisBusy(false)}
 }
 
 ui.mainAction.addEventListener("click",mainAction);
-ui.text.addEventListener("keydown",e=>{if(e.key==="Enter")mainAction()});
+ui.text.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.isComposing&&!state.composing)mainAction()});
+ui.text.addEventListener("compositionstart",()=>{state.composing=true;clearTimeout(state.analysisTimer);state.analysisTimer=null});
+ui.text.addEventListener("compositionend",()=>{state.composing=false;invalidateAnalysis()});
 ui.customFont.addEventListener("keydown",e=>{if(e.key==="Enter")ui.addFont.click()});
 for(const el of [ui.text,ui.fontPreset,ui.weight])el.addEventListener("input",()=>invalidateAnalysis());
 
@@ -795,9 +893,25 @@ ui.samples.addEventListener("input",()=>{
   if(!state.rawContours.length)return;
   clearTimeout(state.sampleTimer);state.sampleTimer=setTimeout(rebuildSamplesSmooth,110);
 });
-ui.speed.addEventListener("input",()=>ui.speedVal.textContent=(+ui.speed.value).toFixed(2));
+ui.speed.addEventListener("input",()=>{
+  ui.speedVal.textContent=(+ui.speed.value).toFixed(2);pitch.updateLabels();
+  if(pitch.enabled&&isPlaying()){clearTimeout(ui.speed._t);ui.speed._t=setTimeout(refreshAudioSmooth,70)}
+});
+ui.soundMode.addEventListener("change",()=>{
+  if(lastSoundMode==="waveform")waveformAutoStop=ui.autoStop.checked;
+  lastSoundMode=ui.soundMode.value;
+  if(!pitch.enabled&&pitch.isOpen())pitch.close({restoreMode:false});
+  ui.autoStop.checked=pitch.enabled?false:waveformAutoStop;
+  ui.autoStop.disabled=pitch.enabled;ui.autoStopSeconds.disabled=pitch.enabled;
+  updateAutoStopUi();scheduleAutoStop();
+  pitch.updateLabels();updatePlayMode();
+  if(isPlaying()){
+    refreshAudioSmooth();
+    setStatus(pitch.enabled?"pitchPlaying":"playing",{phon:ui.loudnessPhon.value});
+  }
+});
 ui.freq.addEventListener("input",()=>{
-  ui.freqVal.textContent=`${ui.freq.value} Hz`;updatePlayMode();
+  ui.freqVal.textContent=`${ui.freq.value} Hz`;updatePlayMode();pitch.updateLabels();
   if(isPlaying()){clearTimeout(ui.freq._t);ui.freq._t=setTimeout(refreshAudioSmooth,70)}
 });
 ui.gain.addEventListener("input",()=>{
@@ -817,7 +931,11 @@ for(const el of [ui.audioTarget,ui.normalizeTarget,ui.loudnessPhon]){
 function updateAutoStopUi(){
   const value=(+ui.autoStopSeconds.value).toFixed(1);
   ui.autoStopSecondsVal.textContent=t("secondsSpaced",{value});
-  ui.autoStopLabel.textContent=ui.autoStop.checked?t("seconds",{value}):t("off");
+  const label=ui.autoStop.parentElement.querySelector('[data-i18n]');
+  label.dataset.i18n=pitch.enabled?"continuous":"autoStop";
+  label.textContent=t(label.dataset.i18n);
+  ui.autoStopLabel.textContent=pitch.enabled?"":ui.autoStop.checked?t("seconds",{value}):t("off");
+  pitch.updateLabels();
 }
 ui.autoStop.addEventListener("change",()=>{updateAutoStopUi();scheduleAutoStop()});
 ui.autoStopSeconds.addEventListener("input",()=>{updateAutoStopUi();scheduleAutoStop()});
@@ -836,10 +954,10 @@ requestAnimationFrame(animate);
 
 // Initial visualization never creates or resumes an AudioContext.
 async function initialize(){
-  state.busy=true;ui.mainAction.disabled=true;
+  setAnalysisBusy(true);
   try{await ensureContours();await analyze()}
-  catch(e){console.error(e);reportError(e)}
-  finally{state.busy=false;ui.mainAction.disabled=false}
+  catch(e){if(e.name!=="AbortError"){console.error(e);reportError(e)}}
+  finally{setAnalysisBusy(false);pitch.updateLabels()}
 }
 initialize();
 })();

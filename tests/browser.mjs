@@ -23,7 +23,10 @@ export async function browserSession(options = {}) {
         output: () => { const {L,R}=buildAudioCycle(); const gain=outputGainValue();
           return { peak: Math.max(...L.map(x=>Math.abs(x*gain)), ...R.map(x=>Math.abs(x*gain))),
             rms: Math.sqrt([...L,...R].reduce((sum,x)=>sum+(x*gain)**2,0)/(L.length+R.length)) }; },
-        analyzeGlyph: async text => { ui.text.value=text;await analyze(); },
+        analyzeGlyph: async text => {
+          clearTimeout(state.analysisTimer);state.analysisTimer=null;state.pendingAnalysis=false;
+          ui.text.value=text;await analyze();
+        },
         fourierData: () => state.data.map(({sampled,coeffs})=>({sampled,coeffs})),
         chain: (index,t,cutoff) => epicycleChain(state.data[index].coeffs,t,cutoff),
         render: ({cutoff=+ui.harm.value,time=.125,clear=false}={}) => {
@@ -42,6 +45,24 @@ export async function browserSession(options = {}) {
           }
           return {contours:state.data.length,mean:samples.reduce((a,b)=>a+b,0)/frames,
             median:samples.slice().sort((a,b)=>a-b)[Math.floor(frames/2)]};
+        },
+        pitchSnapshot: () => ({ mode:ui.soundMode.value, time:pitchTime(), phase:pitch.phase(pitchTime()),
+          signals:pitchSignals().map(values=>Array.from(values)), curves:pitch.curves().map(({values,...curve})=>curve),
+          voices:audio.group?.voices.length||0, groups:audio.groups.size,
+          sourceTypes:audio.group?.voices.map(({src})=>src.type||'buffer')||[],
+          gain:audio.gain?.gain.value||0, cutoff:audioHarmonicLimit() }),
+        pitchGraph: time => {
+          const getTime=pitch.getTime;pitch.getTime=()=>time;
+          try{pitch.draw();return pitch.ui.Graph.toDataURL()}finally{pitch.getTime=getTime}
+        },
+        renderPitch: async ({values,depth=12,rate=.5,phase=0,offset=0,epoch=0,duration=2}) => {
+          const ctx=new OfflineAudioContext(1,Math.ceil(duration*48000),48000);
+          const src=ctx.createOscillator();src.type='sine';src.frequency.value=440;
+          window.FontFourierPitch.connectPitchCurve(ctx,src,
+            {values:new Float32Array(values),depth,rate,phase,offset},epoch,0);
+          src.connect(ctx.destination);src.start(0);src.stop(duration);
+          const result=await ctx.startRendering();
+          return Array.from(result.getChannelData(0));
         },
         thumbnail: () => {
           state.animT=.125;state.harmCurrent=40;drawMain();drawSeries();

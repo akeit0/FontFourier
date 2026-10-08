@@ -21,7 +21,7 @@ for (const [locale, language, glyph] of [['ja-JP', 'ja', 'あ'], ['en-US', 'en',
       await page.locator('#language').selectOption(language === 'en' ? 'ja' : 'en');
       assert.equal(await page.locator('#text').inputValue(), glyph);
       assert.equal(await page.locator('#fontPreset').inputValue(), family);
-      assert.equal(await page.locator('#mainAction').innerText(), language === 'en' ? '解析して鳴らす' : 'Analyze & play');
+      assert.equal(await page.locator('#mainAction').innerText(), language === 'en' ? '再生' : 'Play');
       await page.locator('#settingsBtn').click();
       await page.locator('#aboutBtn').click();
       const visibleText = await page.locator('#aboutOverlay').innerText();
@@ -52,8 +52,292 @@ test('audio starts on click, gain zero mutes, frequency changes stay below clipp
     await page.locator('#closeSettings').click();
     await page.locator('#autoStop').check();
     await page.waitForFunction(() => !window.__test.snapshot().playing);
-    assert.equal(await page.locator('#mainAction').innerText(), 'Analyze & play');
+    assert.equal(await page.locator('#mainAction').innerText(), 'Play');
   } finally { await session.close(); }
+});
+
+test('Fourier-to-pitch uses one full wave per contour, shared controls and sine voices; mode switching and stop release all voices', async () => {
+  const session=await browserSession();
+  try {
+    const page=await initializedPage(session);
+    await page.locator('#autoStop').uncheck();
+    await page.locator('#pitchBtn').click();
+    assert.equal(await page.locator('#pitchGlyph #view').count(),1);
+    assert.equal(await page.locator('#soundMode').inputValue(),'pitch');
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).context,false);
+    await page.locator('#pitchDepth').fill('12');
+    await page.locator('#pitchSpacing').fill('8');
+    await page.locator('#pitchRate').fill('0.2');
+    await page.locator('#pitchPhase').fill('90');
+    await page.locator('#pitchBase').fill('440');
+    let snapshot=await page.evaluate(()=>window.__test.pitchSnapshot());
+    assert.deepEqual(snapshot.curves.map(c=>({depth:c.depth,rate:c.rate,phase:c.phase})),
+      [{depth:12,rate:.2,phase:90},{depth:12,rate:.2,phase:90}]);
+    assert.deepEqual(snapshot.curves.map(c=>c.offset),[-4,4]);
+    assert.equal(await page.locator('#speed').inputValue(),'0.2');
+    assert.equal(await page.locator('#freq').inputValue(),'440');
+    const signalA=snapshot.signals;
+    assert.ok(signalA.flat().some(value=>Math.abs(value)>.99));
+    assert.ok(signalA.flat().every(value=>Math.abs(value)<=1.00001));
+    await page.locator('#pitchPlay').click();
+    await page.waitForFunction(()=>window.__test.pitchSnapshot().voices===2);
+    snapshot=await page.evaluate(()=>window.__test.pitchSnapshot());
+    assert.deepEqual(snapshot.sourceTypes,['sine','sine']);
+    const time=snapshot.time;
+    await page.locator('#pitchDepth').fill('6');
+    await page.waitForFunction(()=>window.__test.pitchSnapshot().groups===1&&window.__test.pitchSnapshot().gain>0);
+    assert.ok((await page.evaluate(()=>window.__test.pitchSnapshot())).time>time);
+    await page.locator('#settingsBtn').click();
+    await page.locator('#soundMode').selectOption('waveform');
+    assert.equal(await page.locator('#pitchOverlay').isVisible(),false);
+    await page.locator('#closeSettings').click();
+    await page.waitForFunction(()=>window.__test.pitchSnapshot().sourceTypes.join()==='buffer'&&window.__test.pitchSnapshot().groups===1);
+    await page.locator('#pitchBtn').click();
+    await page.waitForFunction(()=>window.__test.pitchSnapshot().voices===2);
+    await page.locator('#closePitch').click();
+    await page.locator('#settingsBtn').click();
+    await page.locator('#gain').fill('0');
+    await page.waitForFunction(()=>window.__test.pitchSnapshot().groups===1&&window.__test.pitchSnapshot().gain===0);
+    await page.locator('#closeSettings').click();
+    await page.locator('#pitchBtn').click();
+    await page.locator('#pitchPlay').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().playing&&window.__test.pitchSnapshot().groups===0);
+    await page.locator('#closePitch').click();
+    assert.equal(await page.locator('.stage #view').count(),1);
+    await page.locator('#text').fill('S');
+    await page.waitForFunction(()=>window.__test.snapshot().text==='S'&&!window.__test.snapshot().busy);
+    const signalS=(await page.evaluate(()=>window.__test.pitchSnapshot())).signals;
+    assert.notDeepEqual(signalS,signalA,'changing the letter must change the pitch curves');
+    await page.locator('#language').selectOption('ja');
+    await page.locator('#pitchBtn').click();
+    assert.equal(await page.locator('#pitchTitle').innerText(),'音高カーブ');
+    assert.equal(await page.locator('#pitchMode').count(),0);
+    assert.equal(await page.locator('#pitchRows .pitchRow').count(),1);
+    assert.equal(await page.locator('#autoStop').isChecked(),false);
+    assert.equal(await page.locator('#autoStop').isDisabled(),true);
+  } finally { await session.close(); }
+});
+
+test('closing pitch curves restores the previous sound mode and auto-stop without starting or interrupting audio', async () => {
+  const session=await browserSession();
+  try{
+    const page=await initializedPage(session);
+    await page.locator('#pitchBtn').click();
+    await page.locator('#closePitch').click();
+    assert.equal(await page.locator('#soundMode').inputValue(),'waveform');
+    assert.equal(await page.locator('#autoStop').isChecked(),true);
+    assert.equal(await page.locator('#autoStop').isDisabled(),false);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).context,false);
+    await page.locator('#autoStop').uncheck();
+    for(const close of ['button','escape']){
+      await page.locator('#pitchBtn').click();
+      if(!(await page.evaluate(()=>window.__test.snapshot())).playing)await page.locator('#pitchPlay').click();
+      await page.waitForFunction(()=>window.__test.pitchSnapshot().sourceTypes.every(type=>type==='sine')&&window.__test.pitchSnapshot().voices===2);
+      if(close==='button')await page.locator('#closePitch').click();
+      else await page.keyboard.press('Escape');
+      await page.waitForFunction(()=>window.__test.pitchSnapshot().sourceTypes.join()==='buffer'&&window.__test.pitchSnapshot().groups===1);
+      assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,true);
+      assert.equal(await page.locator('#pitchOverlay').isVisible(),false);
+      assert.equal(await page.locator('#autoStop').isChecked(),false);
+      assert.equal(await page.locator('#autoStop').isDisabled(),false);
+    }
+    await page.locator('#mainAction').click();
+    await page.waitForFunction(()=>!window.__test.snapshot().playing&&window.__test.pitchSnapshot().groups===0);
+    await page.locator('#settingsBtn').click();
+    await page.locator('#soundMode').selectOption('pitch');
+    await page.locator('#closeSettings').click();
+    await page.locator('#pitchBtn').click();
+    await page.locator('#closePitch').click();
+    assert.equal(await page.locator('#soundMode').inputValue(),'pitch');
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,false);
+  }finally{await session.close()}
+});
+
+test('pitch view is exclusive, starts with zero spacing and repeats a fixed cycle independently of elapsed time or speed', async () => {
+  const session=await browserSession({locale:'ja-JP'});
+  try{
+    const page=await initializedPage(session);
+    await page.locator('#pitchBtn').click();
+    assert.equal(await page.locator('#pitchTitle').innerText(),'音高カーブ');
+    assert.equal(await page.locator('#pitchOverlay option[value="waveform"]').count(),0);
+    assert.equal(await page.locator('#pitchSpacing').inputValue(),'0');
+    assert.ok((await page.evaluate(()=>window.__test.pitchSnapshot())).curves.every(curve=>curve.offset===0));
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).context,false);
+    await page.locator('#pitchRate').fill('0.25');
+    assert.equal(await page.locator('#pitchPeriod').innerText(),'周期：4 秒');
+    const first=await page.evaluate(()=>window.__test.pitchGraph(1));
+    const repeated=await page.evaluate(()=>window.__test.pitchGraph(9));
+    assert.ok(first===repeated,'The graph must return to the same position without advancing its axis');
+    await page.locator('#pitchRate').fill('0.5');
+    assert.equal(await page.locator('#pitchPeriod').innerText(),'周期：2 秒');
+    const faster=await page.evaluate(()=>window.__test.pitchGraph(.5));
+    assert.ok(first===faster,'Changing speed must preserve the graph of one cycle');
+    await page.locator('#pitchPhase').fill('90');
+    const shifted=await page.evaluate(()=>window.__test.pitchGraph(0));
+    assert.ok(first===shifted,'Phase must move the playhead to the same point as the epicycles');
+    await page.locator('#language').selectOption('en');
+    assert.equal(await page.locator('#pitchTitle').innerText(),'Pitch curves');
+    assert.equal(await page.locator('#pitchPeriod').innerText(),'Period: 2 s');
+    assert.match(await page.locator('#pitchPosition').innerText(),/^Cycle position: 0\./);
+    assert.match(await page.locator('[data-i18n="pitchCycleAxis"]').innerText(),/one cycle \(0–1\)/);
+  }finally{await session.close()}
+});
+
+test('one contour creates exactly one tone; three contours create three tones and graph curves', async () => {
+  const session=await browserSession({locale:'ja-JP'});
+  try {
+    const page=await initializedPage(session);
+    await page.locator('#pitchBtn').click();
+    let state=await page.evaluate(()=>window.__test.snapshot());
+    assert.equal(state.contours,3);
+    assert.equal(await page.locator('#pitchRows .pitchRow').count(),3);
+    await page.locator('#pitchPlay').click();
+    await page.waitForFunction(()=>window.__test.pitchSnapshot().voices===3);
+    await page.locator('#text').fill('S');
+    await page.waitForFunction(()=>window.__test.snapshot().text==='S'&&!window.__test.snapshot().busy);
+    state=await page.evaluate(()=>window.__test.snapshot());
+    assert.equal(state.contours,1);assert.equal(state.playing,true);
+    const pitch=await page.evaluate(()=>window.__test.pitchSnapshot());
+    assert.equal(pitch.voices,1);assert.equal(pitch.signals.length,1);
+    assert.equal(pitch.curves[0].offset,0);
+    assert.equal(await page.locator('#pitchRows .pitchRow').count(),1);
+    await page.locator('#text').fill('O');
+    await page.waitForFunction(()=>window.__test.snapshot().text==='O'&&!window.__test.snapshot().busy);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).contours,2);
+    assert.equal((await page.evaluate(()=>window.__test.pitchSnapshot())).voices,2);
+    assert.equal(await page.locator('#pitchRows .pitchRow').count(),2);
+    await page.locator('#pitchPlay').click();
+    await page.waitForFunction(()=>window.__test.pitchSnapshot().groups===0);
+  } finally { await session.close(); }
+});
+
+test('pitch plays past a full cycle, and editing the letter/font updates its contour curves without stopping', async () => {
+  const session=await browserSession();
+  try {
+    const page=await initializedPage(session);
+    const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    assert.equal(await page.locator('#autoStop').isChecked(),true);
+    await page.locator('#pitchBtn').click();
+    await page.locator('#pitchPlay').click();
+    const started=await page.evaluate(()=>window.__test.pitchSnapshot().time);
+    await page.waitForFunction(started=>{
+      const state=window.__test.pitchSnapshot();
+      return state.time-started>8.5;
+    },started,{timeout:14000});
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,true);
+    const signalA=(await page.evaluate(()=>window.__test.pitchSnapshot())).signals;
+    await page.locator('#text').fill('S');
+    await page.waitForFunction(()=>window.__test.snapshot().text==='S'&&!window.__test.snapshot().busy);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,true);
+    assert.notDeepEqual((await page.evaluate(()=>window.__test.pitchSnapshot())).signals,signalA);
+    await page.locator('#fontPreset').selectOption('Playfair Display');
+    await page.locator('#weight').selectOption('700');
+    await page.waitForFunction(()=>window.__test.snapshot().key==='S\nPlayfair Display\n700'&&!window.__test.snapshot().busy);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).playing,true);
+    await page.locator('#settingsBtn').click();
+    await page.locator('#closeSettings').click();
+    assert.equal(await page.locator('#pitchTitle').isVisible(),true);
+    await page.locator('#pitchPlay').click();
+    await page.waitForFunction(()=>window.__test.pitchSnapshot().groups===0);
+    assert.deepEqual(errors,[]);
+  } finally { await session.close(); }
+});
+
+test('latest letter wins when typing interrupts a pending font load; IME confirmation never starts audio', async () => {
+  const session=await browserSession({locale:'ja-JP'});
+  let release;
+  const blocked=new Promise(resolve=>{release=resolve});
+  try {
+    const page=await initializedPage(session);
+    await page.route('https://fonts.googleapis.com/**',async route=>{
+      if(new URL(route.request().url()).searchParams.get('text')?.trim()==='B')await blocked;
+      await route.continue().catch(()=>{});
+    });
+    await page.locator('#text').fill('B');
+    await page.waitForFunction(()=>window.__test.snapshot().busy);
+    await page.locator('#text').fill('C');
+    await page.waitForFunction(()=>window.__test.snapshot().text==='C'&&!window.__test.snapshot().busy);
+    release();
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).text,'C');
+    await page.locator('#text').dispatchEvent('compositionstart');
+    await page.locator('#text').fill('い');
+    await page.locator('#text').dispatchEvent('keydown',{key:'Enter',isComposing:true});
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).context,false);
+    await page.locator('#text').dispatchEvent('compositionend');
+    await page.waitForFunction(()=>window.__test.snapshot().text==='い'&&!window.__test.snapshot().busy);
+    assert.equal((await page.evaluate(()=>window.__test.snapshot())).context,false);
+  } finally { release();await session.close(); }
+});
+
+function measuredFrequency(samples,at,window=.04){
+  const sr=48000,start=Math.floor((at-window/2)*sr),end=Math.floor((at+window/2)*sr),crossings=[];
+  for(let i=start;i<end;i++)if(samples[i]<=0&&samples[i+1]>0){
+    crossings.push(i-samples[i]/(samples[i+1]-samples[i]));
+  }
+  return (crossings.length-1)*sr/(crossings.at(-1)-crossings[0]);
+}
+
+test('rendered sine pitch follows Fourier control samples, offsets and phase across the full cycle', async () => {
+  const session=await browserSession();
+  try {
+    const page=await initializedPage(session);
+    const values=Array.from({length:4096},(_,i)=>Math.sin(2*Math.PI*i/4096));
+    const samples=await page.evaluate(args=>window.__test.renderPitch(args),{values,rate:.5,depth:12});
+    assert.ok(Math.abs(measuredFrequency(samples,.5)-880)<9);
+    assert.ok(Math.abs(measuredFrequency(samples,1.5)-220)<3);
+    const shifted=await page.evaluate(args=>window.__test.renderPitch(args),{values,depth:12,offset:12,phase:180});
+    assert.ok(Math.abs(measuredFrequency(shifted,.5)-440)<5);
+    assert.ok(Math.abs(measuredFrequency(shifted,1.5)-1760)<18);
+    const signals=(await page.evaluate(()=>window.__test.pitchSnapshot())).signals;
+    const glyphSamples=await page.evaluate(args=>window.__test.renderPitch(args),{values:signals[0],depth:7,rate:.12,duration:2});
+    for(const at of [.3,.9,1.6]){
+      const index=at*.12*signals[0].length;
+      const expected=440*2**(7*signals[0][Math.floor(index)]/12);
+      assert.ok(Math.abs(measuredFrequency(glyphSamples,at)-expected)/expected<.04,`t=${at}: expected ${expected}`);
+    }
+  } finally { await session.close(); }
+});
+
+test('portrait pitch view keeps a large glyph, scrollable controls and visible playback after resizing', async () => {
+  const session=await browserSession({viewport:{width:390,height:844},deviceScaleFactor:2});
+  try{
+    const page=await initializedPage(session);
+    await page.locator('#pitchBtn').click();
+    for(const viewport of [{width:320,height:568},{width:390,height:844},{width:768,height:1024}]){
+      await page.setViewportSize(viewport);
+      for(const language of ['en','ja']){
+        await page.locator('#language').selectOption(language);
+        await page.locator('.pitchWorkspace').evaluate(el=>{el.scrollTop=0});
+        await page.waitForFunction(()=>{
+          const canvas=document.querySelector('#view'),rect=canvas.getBoundingClientRect();
+          return rect.height>=280&&Math.abs(canvas.height-rect.height*devicePixelRatio)<=1;
+        });
+        const glyph=await page.locator('#pitchGlyph').boundingBox();
+        const graph=await page.locator('#pitchGraph').boundingBox();
+        assert.ok(glyph.height>=280&&glyph.width>=viewport.width-1);
+        assert.ok(graph.height>=100&&graph.y>=glyph.y+glyph.height);
+        assert.equal(await page.locator('#mainAction').isVisible(),false);
+        assert.equal(await page.locator('#pitchPlay').isVisible(),true);
+        await page.locator('#pitchSpacing').scrollIntoViewIfNeeded();
+        await page.locator('#pitchSpacing').fill('3');
+        const input=await page.locator('#pitchSpacing').boundingBox();
+        const header=await page.locator('.pitchHead').boundingBox();
+        const footer=await page.locator('.transport').boundingBox();
+        assert.ok(input.y>=header.y+header.height&&input.y+input.height<=footer.y+1,JSON.stringify({viewport,language,input,header,footer}));
+        assert.ok(input.x>=0&&input.x+input.width<=viewport.width);
+        assert.ok(header.y>=0&&footer.y+footer.height<=viewport.height+1);
+        assert.equal((await page.evaluate(()=>window.__test.snapshot())).context,false);
+      }
+    }
+    await page.setViewportSize({width:1280,height:720});
+    assert.equal(await page.locator('#mainAction').isVisible(),true);
+    await page.locator('#closePitch').click();
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.locator('#mainAction').isVisible(),true);
+    assert.equal(await page.locator('#pitchBtn').isVisible(),true);
+    assert.equal(await page.locator('.stage #view').count(),1);
+    assert.equal(await page.locator('#soundMode').inputValue(),'waveform');
+  }finally{await session.close()}
 });
 
 test('mobile EN/JA controls fit and custom fonts survive language changes and reloads', async () => {

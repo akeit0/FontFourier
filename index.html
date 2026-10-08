@@ -90,6 +90,8 @@ input:focus,select:focus{border-color:#4c647f}
 }
 .autoStopPill input{width:auto;accent-color:var(--accent);margin:0}
 .autoStopPill span{color:var(--muted);font-variant-numeric:tabular-nums}
+.autoStopPill input:disabled{display:none}
+.autoStopPill:has(input:disabled) span[data-i18n]{display:inline}
 .transportInfo{
   min-width:120px;max-width:260px;display:flex;flex-direction:column;align-items:flex-end;gap:2px;
   color:var(--muted);font-size:11px;line-height:1.3
@@ -213,6 +215,59 @@ input[type="range"]{padding:0}
 @media(max-width:430px){
   .autoStopPill span{display:none}
 }
+.pitchButton{white-space:nowrap}
+.transport{grid-template-columns:minmax(180px,1fr) auto auto 220px}
+.pitchOverlay{position:absolute;inset:0;z-index:10;background:#101620;display:none}
+.pitchOpen .pitchOverlay{display:grid;place-items:center}
+.pitchCard{width:100%;height:100%;background:#101620;overflow:hidden;display:grid;grid-template-rows:auto minmax(0,1fr)}
+.pitchOpen .seriesPanel{visibility:hidden}
+.pitchHead{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.pitchHead h2{margin:0;font-size:16px}
+.pitchHeadActions{display:flex;align-items:center;gap:8px}
+.pitchHeadActions .mainAction{width:auto;min-height:38px;font-size:13px;padding:0 16px}
+.pitchWorkspace{display:grid;grid-template-columns:320px minmax(0,1fr);min-height:0}
+.pitchExpressions{overflow:auto;border-right:1px solid var(--line);padding:16px}
+.pitchExpressions>.check{margin-bottom:10px}
+.pitchRow{margin-top:16px;border:1px solid var(--line);border-left:3px solid var(--curve-color);border-radius:10px;padding:12px;background:#141b26}
+.pitchRowName{font-size:12px;color:var(--curve-color)}
+.pitchFormula{font-family:ui-monospace,monospace;color:var(--curve-color);font-size:11px;line-height:1.5;overflow-wrap:anywhere;margin:12px 0}
+.pitchParameters{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pitchParameters label{margin:0;font-size:11px}
+.pitchParameters input{margin-top:4px;padding:6px 8px;font-size:14px}
+.pitchReadout{display:block;color:var(--curve-color);font-size:12px;font-variant-numeric:tabular-nums;margin-top:10px}
+.pitchPlot{min-width:0;min-height:0;position:relative;display:grid;grid-template-rows:auto minmax(0,1fr) auto;padding:16px;gap:10px}
+.pitchVisuals{display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr);min-width:0;min-height:0}
+.pitchGlyph{position:relative;min-height:0;border-bottom:1px solid var(--line);overflow:hidden}
+.pitchPlotHead{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:12px}
+.pitchPeriod{white-space:nowrap}
+#pitchGraph{width:100%;height:100%;min-height:0;display:block}
+.pitchLegend{display:flex;flex-wrap:wrap;gap:8px 16px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+@media(max-width:720px){
+  .transport{grid-template-columns:1fr auto;grid-template-areas:"play autostop" "info pitch"}
+  .pitchButton{grid-area:pitch;min-height:28px;font-size:11px}
+  .pitchOverlay{padding:0}
+  .pitchCard{height:100%;border:0;border-radius:0}
+  .pitchHead{padding:10px;gap:6px}
+  .pitchHead h2{font-size:14px}
+  .pitchHeadActions{gap:6px}
+  .pitchHeadActions .mainAction{font-size:12px;padding:0 10px}
+  .pitchWorkspace{display:flex;flex-direction:column-reverse}
+  .pitchVisuals{height:60%;flex-shrink:0;grid-template-rows:minmax(0,.9fr) minmax(0,1.1fr)}
+  .pitchPlot{padding:10px}
+  .pitchExpressions{flex:1;min-height:0;border-right:0;border-top:1px solid var(--line);padding:12px;overflow:auto}
+  .pitchRow{margin-top:12px}
+}
+@media(max-width:900px) and (orientation:portrait){
+  .pitchOpen .transport{grid-template-columns:minmax(0,1fr);grid-template-areas:"info";padding-top:6px;gap:0}
+  .pitchOpen .transport>.mainAction,.pitchOpen .autoStopPill,.pitchOpen .pitchButton{display:none}
+  .pitchOpen .transportInfo{grid-area:info;min-width:0;max-width:none;flex-direction:row;align-items:center;gap:12px;width:100%}
+  .pitchOpen .status{text-align:left}
+  .pitchOpen .modeBadge{white-space:nowrap}
+  .pitchWorkspace{display:flex;flex-direction:column;overflow:auto;overscroll-behavior:contain;scroll-padding:12px}
+  .pitchVisuals{order:0;height:auto;flex:none;grid-template-rows:clamp(220px,calc(100vw - 24px),440px) 200px}
+  .pitchExpressions{order:1;flex:none;min-height:0;overflow:visible;border-right:0;border-top:1px solid var(--line);padding:12px}
+  .pitchPlot{padding:10px}
+}
 </style>
 </head>
 <body>
@@ -261,7 +316,8 @@ input[type="range"]{padding:0}
   </main>
 
   <footer class="transport">
-    <button id="mainAction" class="mainAction"><span data-i18n="play">Analyze &amp; play</span></button>
+    <button id="mainAction" class="mainAction"><span data-i18n="play">Play</span></button>
+    <button id="pitchBtn" class="aboutBtn pitchButton" type="button" data-i18n="pitchCurves">Pitch curves</button>
     <label class="autoStopPill">
       <input id="autoStop" type="checkbox" checked>
       <span data-i18n="autoStop">Auto stop</span> <span id="autoStopLabel">2.0 s</span>
@@ -338,6 +394,13 @@ input[type="range"]{padding:0}
     <section class="section">
       <h2><span data-i18n="audioSection">Audio / volume</span></h2>
       <div class="field">
+        <label for="soundMode" data-i18n="soundMode">Sound mode</label>
+        <select id="soundMode">
+          <option value="waveform" data-i18n="waveformMode">Fourier waveform</option>
+          <option value="pitch" data-i18n="pitchMode">Fourier → pitch</option>
+        </select>
+      </div>
+      <div class="field">
         <label><span data-i18n="audioTarget">Audio contours</span></label>
         <select id="audioTarget">
           <option value="all" selected data-i18n="allContours">All contours</option>
@@ -409,12 +472,48 @@ input[type="range"]{padding:0}
   </section>
 </div>
 
+<div class="pitchOverlay" id="pitchOverlay" aria-hidden="true" inert>
+  <section class="pitchCard" role="region" aria-labelledby="pitchTitle">
+    <div class="pitchHead">
+      <h2 id="pitchTitle" data-i18n="pitchCurves">Pitch curves</h2>
+      <div class="pitchHeadActions">
+        <button id="pitchPlay" class="mainAction" type="button" data-i18n="pitchPlay">Play</button>
+        <button id="closePitch" class="closeBtn" type="button" aria-label="Close" data-i18n-aria="close">×</button>
+      </div>
+    </div>
+    <div class="pitchWorkspace">
+      <div class="pitchExpressions">
+        <p class="hint" data-i18n="pitchHint">One contour, one sine tone. All controls are shared.</p>
+        <div class="pitchParameters" id="pitchSharedParameters">
+          <label><span data-i18n="pitchBase">Base (Hz)</span><input id="pitchBase" type="number" min="40" max="880" step="1" value="220"></label>
+          <label><span data-i18n="pitchDepth">Range (semitones)</span><input id="pitchDepth" type="number" min="0" max="24" step="0.5" value="7"></label>
+          <label><span data-i18n="pitchRate">Speed (cycles/s)</span><input id="pitchRate" type="number" min="0.02" max="0.5" step="0.01" value="0.12"></label>
+          <label><span data-i18n="pitchPhase">Phase (°)</span><input id="pitchPhase" type="number" min="0" max="360" step="5" value="0"></label>
+          <label><span data-i18n="pitchSpacing">Spacing (semitones)</span><input id="pitchSpacing" type="number" min="0" max="12" step="0.5" value="0"></label>
+        </div>
+        <div id="pitchRows"></div>
+      </div>
+      <div class="pitchVisuals">
+        <div id="pitchGlyph" class="pitchGlyph"></div>
+        <div class="pitchPlot">
+        <div class="pitchPlotHead">
+          <span id="pitchAxisLabel"></span>
+          <span id="pitchPeriod" class="pitchPeriod"></span>
+        </div>
+        <canvas id="pitchGraph" role="img" aria-label="Pitch for one cycle" data-i18n-aria="pitchGraphLabel"></canvas>
+        <div class="pitchLegend"><span id="pitchPosition"></span><span data-i18n="pitchCycleAxis">Horizontal axis: one cycle (0–1)</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
 <div id="fontProbe" class="fontProbe">A</div>
 <canvas id="raster" style="display:none"></canvas>
 
 <script defer src="./assets/i18n.js"></script>
 <script defer src="./assets/glyph-probes.js"></script>
 <script defer src="./assets/glyph-check.js"></script>
+<script defer src="./assets/pitch.js"></script>
 <script defer src="./assets/app.js"></script>
 </body>
 </html>

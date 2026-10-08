@@ -15,7 +15,7 @@ for (const key of Object.keys(messages.en)) {
   const placeholders = text => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
   assert.deepEqual(placeholders(messages.en[key]), placeholders(messages.ja[key]), `${key}: placeholder mismatch`);
 }
-for (const file of ['assets/app.js', 'assets/i18n.js', 'assets/glyph-probes.js', 'assets/glyph-check.js', 'scripts/serve.mjs', 'scripts/build.mjs']) {
+for (const file of ['assets/app.js', 'assets/i18n.js', 'assets/glyph-probes.js', 'assets/glyph-check.js', 'assets/pitch.js', 'scripts/serve.mjs', 'scripts/build.mjs']) {
   execFileSync(process.execPath, ['--check', fileURLToPath(new URL(file, root))]);
 }
 for (const match of html.matchAll(/(?:src|href)="\.\/([^"?#]+)"/g)) {
